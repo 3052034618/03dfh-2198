@@ -17,7 +17,7 @@ import {
   Globe,
 } from "lucide-react";
 import { useComicStore, type ShareResult } from "@/store/comicStore";
-import { buildSharePackage, type ShareMode, SHORT_SHARE_TTL } from "@/utils";
+import { buildSharePackage, type ShareMode, SHORT_SHARE_TTL, cn } from "@/utils";
 import { motion, AnimatePresence } from "framer-motion";
 
 const TTL_DAYS = Math.round(SHORT_SHARE_TTL / (1000 * 60 * 60 * 24));
@@ -133,12 +133,13 @@ function ShareModal({ onClose }: { onClose: () => void }) {
   };
 
   const linkCharCount = result.link.length;
+  const isLongLinkTooLong = result.mode === "long" && linkCharCount > 6000;
   const charCountColor = useMemo(
     () =>
       linkCharCount > 6000
-        ? "text-accent-orange"
+        ? "text-red-500"
         : linkCharCount > 3000
-          ? "text-ink-500"
+          ? "text-accent-orange"
           : "text-ink-300",
     [linkCharCount],
   );
@@ -202,8 +203,9 @@ function ShareModal({ onClose }: { onClose: () => void }) {
                   <div className="text-sm font-medium text-accent-orange font-serif">
                     {result.reason}
                   </div>
-                  <p className="text-xs text-ink-500 mt-1">
-                    建议改用短链接方式，或直接导出自包含 HTML 文件
+                  <p className="text-xs text-ink-500 mt-1 leading-relaxed">
+                    建议直接下载 HTML 文件，对方双击就能打开，最稳妥。
+                    或者试试短链接方式（仅同浏览器可用）。
                   </p>
                 </div>
               </motion.div>
@@ -215,6 +217,22 @@ function ShareModal({ onClose }: { onClose: () => void }) {
                 exit={{ opacity: 0, y: -4 }}
                 className="space-y-2 mb-4"
               >
+                {isLongLinkTooLong && (
+                  <div className="rounded-xl bg-accent-orangeSoft/40 border border-accent-orange/20 p-3 flex items-start gap-2.5">
+                    <AlertTriangle
+                      size={15}
+                      className="text-accent-orange shrink-0 mt-0.5"
+                    />
+                    <div>
+                      <div className="text-xs font-medium text-accent-orange">
+                        链接比较长，部分浏览器/聊天软件可能打不开
+                      </div>
+                      <p className="text-[11px] text-ink-500 mt-0.5 leading-relaxed">
+                        建议优先用下方的 HTML 文件分享，对方收到直接打开就能看。
+                      </p>
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-medium text-ink-500 ml-1">
                     {result.mode === "long" ? "完整分享链接" : "短分享链接"}
@@ -260,14 +278,15 @@ function ShareModal({ onClose }: { onClose: () => void }) {
                   <ShieldCheck size={12} className="mt-0.5 shrink-0 text-ink-300" />
                   {result.mode === "long" ? (
                     <span>
-                      链接里直接包含图片和自评信息，任何设备打开即可预览，
-                      <span className="text-ink-500">不需要服务器</span>。
+                      数据直接编码在链接里，任何设备打开就能看，
+                      <span className="text-ink-500">不需要服务器，也不会上传</span>。
                     </span>
                   ) : (
-                    <span>
-                      数据保存在这台浏览器里，链接更短。
+                    <span className="text-accent-orange">
+                      ⚠️ 仅在<strong>同一台浏览器</strong>中可用。
+                      数据存在你当前的浏览器里，对方换设备/清缓存就打不开了。
                       <span className="text-ink-500">
-                        注意：换了浏览器/清理缓存会失效，重要内容请再导出一份 HTML。
+                        重要内容务必再导出一份 HTML。
                       </span>
                     </span>
                   )}
@@ -276,25 +295,53 @@ function ShareModal({ onClose }: { onClose: () => void }) {
             )}
           </AnimatePresence>
 
-          <div className="rounded-xl bg-paper-100/70 border border-paper-200 p-3 mb-4">
+          <div
+            className={cn(
+              "rounded-xl p-3.5 mb-4 border transition-all",
+              isLongLinkTooLong || !result.ok
+                ? "bg-accent-greenSoft/30 border-accent-green/30"
+                : "bg-paper-100/70 border-paper-200",
+            )}
+          >
             <div className="flex items-center gap-2 mb-2.5">
-              <FileCode size={14} className="text-accent-green" />
-              <div className="text-xs font-semibold text-ink-700 font-serif">
-                推荐再导出一份 HTML 文件（最稳）
+              {isLongLinkTooLong || !result.ok ? (
+                <div className="w-7 h-7 rounded-lg bg-accent-green text-white flex items-center justify-center shrink-0">
+                  <ShieldCheck size={15} />
+                </div>
+              ) : (
+                <FileCode size={14} className="text-accent-green" />
+              )}
+              <div>
+                <div
+                  className={cn(
+                    "text-xs font-semibold font-serif",
+                    isLongLinkTooLong || !result.ok
+                      ? "text-accent-green"
+                      : "text-ink-700",
+                  )}
+                >
+                  {(isLongLinkTooLong || !result.ok) && "⭐ 推荐 "}
+                  自包含 HTML 文件（最稳妥）
+                </div>
               </div>
             </div>
-            <p className="text-[11px] text-ink-500 leading-relaxed mb-3 pl-6">
-              HTML 文件里嵌入了全部图片 + 样式，对方双击就能在浏览器打开，
+            <p className="text-[11px] text-ink-500 leading-relaxed mb-3 pl-0 md:pl-9">
+              HTML 文件嵌入了全部图片 + 样式，对方双击就能在浏览器打开，
               不用依赖这个网站。通过微信、邮件、网盘发送都没问题。
             </p>
-            <div className="flex flex-wrap gap-2 pl-6">
+            <div className="flex flex-wrap gap-2 pl-0 md:pl-9">
               <button
                 type="button"
                 onClick={() => exportStandalone()}
                 disabled={!work}
-                className="btn-secondary !py-2 !px-3 text-xs"
+                className={cn(
+                  "!py-2 !px-3 text-xs",
+                  isLongLinkTooLong || !result.ok
+                    ? "btn-primary !bg-accent-green hover:!bg-accent-greenHover"
+                    : "btn-secondary",
+                )}
               >
-                <FileText size={14} /> 导出 HTML 文件
+                <FileText size={14} /> 下载 HTML 分享包
               </button>
               <button
                 type="button"

@@ -116,7 +116,11 @@ export default function SharePage({ mode }: Props) {
     });
   }, []);
 
-  const feedbackCount = feedback.filter((t) => t?.text?.trim()).length;
+  const hasAnyFeedback = feedback.some((t) => t?.text?.trim() || t?.status);
+  const effectiveFeedbackCount = feedback.filter(
+    (t) => t?.text?.trim() || t?.status,
+  ).length;
+  const textFeedbackCount = feedback.filter((t) => t?.text?.trim()).length;
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = { review: 0, revise: 0, pass: 0 };
     feedback.forEach((f) => {
@@ -124,6 +128,37 @@ export default function SharePage({ mode }: Props) {
     });
     return counts;
   }, [feedback]);
+
+  const totalStatusCount = statusCounts.review + statusCounts.revise + statusCounts.pass;
+
+  const [isAuthorMode, setIsAuthorMode] = useState(false);
+  const [showTodoPanel, setShowTodoPanel] = useState(false);
+
+  const resolvedCount = useMemo(
+    () => feedback.filter((f) => (f?.text?.trim() || f?.status) && f.resolved).length,
+    [feedback],
+  );
+  const todoCount = effectiveFeedbackCount - resolvedCount;
+
+  const toggleResolved = useCallback((i: number) => {
+    setFeedback((arr) => {
+      const n = [...arr];
+      n[i] = { ...n[i], resolved: !n[i].resolved };
+      return n;
+    });
+  }, []);
+
+  const setAllResolved = (status: FeedbackStatus | "all") => {
+    setFeedback((arr) =>
+      arr.map((f, i) => {
+        const hasContent = f?.text?.trim() || f?.status;
+        if (!hasContent) return f;
+        if (status === "all") return { ...f, resolved: true };
+        if (f.status === status) return { ...f, resolved: true };
+        return f;
+      }),
+    );
+  };
 
   const downloadHtmlWithFeedback = () => {
     if (!pkg) return;
@@ -237,6 +272,21 @@ export default function SharePage({ mode }: Props) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {hasAnyFeedback && (
+            <button
+              type="button"
+              onClick={() => setIsAuthorMode((v) => !v)}
+              className={cn(
+                "btn-ghost !py-1.5 !px-3 !text-xs border",
+                isAuthorMode
+                  ? "!bg-accent-green !text-white !border-accent-green"
+                  : "!border-paper-300",
+              )}
+            >
+              <Check size={13} />
+              {isAuthorMode ? "作者回收台" : "切换到作者模式"}
+            </button>
+          )}
           {draftSavedAt && (
             <div className="text-[11px] text-ink-400 flex items-center gap-1 mr-1">
               <HardDrive size={12} className="text-accent-green" />
@@ -246,7 +296,8 @@ export default function SharePage({ mode }: Props) {
           <button
             type="button"
             onClick={copySummary}
-            className="btn-ghost !border !border-paper-300 text-xs"
+            disabled={!hasAnyFeedback}
+            className="btn-ghost !border !border-paper-300 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {copied ? <Check size={14} /> : <Copy size={14} />}
             {copied ? "已复制摘要" : "复制反馈摘要"}
@@ -254,8 +305,8 @@ export default function SharePage({ mode }: Props) {
           <button
             type="button"
             onClick={exportText}
-            disabled={feedbackCount === 0}
-            className="btn-secondary !px-4 !py-2 !text-xs"
+            disabled={!hasAnyFeedback}
+            className="btn-secondary !px-4 !py-2 !text-xs disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <FileText size={14} /> 导出 TXT
           </button>
@@ -426,11 +477,26 @@ export default function SharePage({ mode }: Props) {
                         </span>
                       )}
                     </div>
-                    {currentEntry.text?.trim() && (
-                      <div className="text-[11px] text-accent-green flex items-center gap-1">
-                        <Check size={11} /> 已记录
+                    {currentEntry.text?.trim() || currentEntry.status ? (
+                      <div
+                        className={cn(
+                          "text-[11px] flex items-center gap-1",
+                          currentEntry.resolved
+                            ? "text-accent-green"
+                            : "text-accent-orange",
+                        )}
+                      >
+                        {currentEntry.resolved ? (
+                          <>
+                            <Check size={11} /> 已处理
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle size={11} /> 待处理
+                          </>
+                        )}
                       </div>
-                    )}
+                    ) : null}
                   </div>
 
                   {/* 状态选择 */}
@@ -459,6 +525,30 @@ export default function SharePage({ mode }: Props) {
                       );
                     })}
                   </div>
+
+                  {/* 作者模式：处理进度 */}
+                  <AnimatePresence>
+                    {isAuthorMode && (currentEntry.text?.trim() || currentEntry.status) && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="mb-3"
+                      >
+                        <label className="flex items-center gap-2 p-2.5 rounded-lg bg-accent-greenSoft/30 border border-accent-green/20 cursor-pointer hover:bg-accent-greenSoft/50 transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={currentEntry.resolved || false}
+                            onChange={() => toggleResolved(activeIdx)}
+                            className="w-4 h-4 rounded text-accent-green focus:ring-accent-green"
+                          />
+                          <span className="text-xs text-ink-700 font-medium">
+                            ✓ 标记为已处理
+                          </span>
+                        </label>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   <textarea
                     value={currentEntry.text || ""}
@@ -507,17 +597,71 @@ export default function SharePage({ mode }: Props) {
 
           <aside className="paper-card grain-overlay overflow-hidden flex flex-col max-h-[calc(100vh-10rem)]">
             <div className="p-4 border-b border-paper-200">
+              {isAuthorMode ? (
+                <div className="mb-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-serif font-semibold text-ink-900 flex items-center gap-1.5">
+                      <Check size={14} className="text-accent-green" />
+                      作者回收台
+                    </div>
+                    <div className="text-[11px] text-ink-500 font-mono">
+                      <span className="text-accent-green font-semibold">{resolvedCount}</span>
+                      <span className="text-ink-300 mx-1">/</span>
+                      <span>{effectiveFeedbackCount}</span>
+                    </div>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-paper-200 overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gradient-to-r from-accent-green to-accent-orange"
+                      animate={{ width: `${effectiveFeedbackCount > 0 ? (resolvedCount / effectiveFeedbackCount) * 100 : 0}%` }}
+                      transition={{ duration: 0.4 }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <div className="flex items-center gap-1">
+                      {(["review", "revise", "pass"] as const).map((s) => {
+                        const meta = FEEDBACK_STATUS_META[s];
+                        const count = statusCounts[s] || 0;
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => setAllResolved(s)}
+                            title={`一键标记所有${meta.label}为已处理`}
+                            className="text-[10px] text-ink-400 hover:text-ink-600"
+                          >
+                            {meta.icon}
+                            {count}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {todoCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setAllResolved("all")}
+                        className="text-[10px] text-accent-green hover:underline"
+                      >
+                        全部已处理
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
               <div className="flex items-center justify-between mb-1.5">
                 <div>
                   <h3 className="font-serif font-semibold text-ink-900 text-sm">
-                    页序总览
+                    {isAuthorMode ? "待办清单" : "页序总览"}
                   </h3>
-                  <div className="text-[11px] text-ink-400 mt-0.5">
-                    <span className="text-accent-green font-medium">
-                      {feedbackCount}
-                    </span>{" "}
-                    / {pages.length} 页已写反馈
-                  </div>
+                  {!isAuthorMode && (
+                    <div className="text-[11px] text-ink-400 mt-0.5">
+                      <span className="text-accent-green font-medium">
+                        {effectiveFeedbackCount}
+                      </span>{" "}
+                      / {pages.length} 页已处理
+                    </div>
+                  )}
                 </div>
                 <div className="text-[11px] text-ink-400 font-mono">
                   {pages.length}
@@ -543,7 +687,7 @@ export default function SharePage({ mode }: Props) {
                     </span>
                   );
                 })}
-                {feedbackCount > 0 && (
+                {hasAnyFeedback && (
                   <button
                     type="button"
                     onClick={clearDraft}
@@ -556,96 +700,207 @@ export default function SharePage({ mode }: Props) {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-3 grid grid-cols-3 gap-2 content-start">
-              {pages.map((p, i) => {
-                const active = activeIdx === i;
-                const entry = feedback[i] || { text: "", status: null };
-                const hasFb = entry.text?.trim();
-                const hasStatus = entry.status;
-                return (
-                  <button
-                    type="button"
-                    key={i}
-                    onClick={() => setActiveIdx(i)}
-                    className={cn(
-                      "relative rounded-lg overflow-hidden border-2 transition-all",
-                      active
-                        ? "border-accent-orange shadow-paperHover scale-[1.02] z-10"
-                        : hasStatus
-                          ? cn(`${FEEDBACK_STATUS_META[hasStatus].borderColor}`, "border-2")
-                          : "border-paper-300 hover:border-ink-300",
-                    )}
-                  >
-                    <div className="aspect-[3/4] bg-paper-200">
-                      <img
-                        src={p.i}
-                        alt={`第 ${i + 1} 页`}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
-                    </div>
-                    <div className="absolute top-1 left-1 w-5 h-5 rounded bg-paper-50/90 text-[10px] font-semibold text-ink-700 flex items-center justify-center tabular-nums">
-                      {i + 1}
-                    </div>
-                    {hasFb && (
-                      <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-accent-green text-white flex items-center justify-center shadow-paper">
-                        <MessageSquare size={10} />
-                      </div>
-                    )}
-                    {hasStatus && (
-                      <div
-                        className={cn(
-                          "absolute bottom-1 right-1 px-1 py-0.5 rounded text-white text-[9px] font-medium shadow-paper",
-                          FEEDBACK_STATUS_META[hasStatus].color,
-                        )}
-                      >
-                        {FEEDBACK_STATUS_META[hasStatus].icon}
-                      </div>
-                    )}
-                    {p.t && (
-                      <div
-                        className={`absolute bottom-1 left-1 tag-chip !px-1.5 !py-0.5 ${TAG_META[p.t].color}`}
-                      >
-                        <span className="text-[9px]">
-                          {TAG_META[p.t].icon}
-                        </span>
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+            {isAuthorMode ? (
+              <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                {(["review", "revise", "pass"] as const).map((statusKey) => {
+                  const meta = FEEDBACK_STATUS_META[statusKey];
+                  const items = feedback
+                    .map((entry, idx) => ({ entry, idx }))
+                    .filter(
+                      ({ entry }) =>
+                        (entry.status === statusKey) &&
+                        (entry.text?.trim() || entry.status),
+                    );
+                  if (items.length === 0) return null;
 
-            {feedbackCount > 0 && (
+                  const unresolvedCount = items.filter(({ entry }) => !entry.resolved).length;
+
+                  return (
+                    <div key={statusKey}>
+                      <div className="flex items-center justify-between px-1 mb-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className={cn("w-3 h-3 rounded-full", meta.color)} />
+                          <span className="text-[11px] font-semibold text-ink-700">
+                            {meta.label}
+                          </span>
+                          <span className="text-[10px] text-ink-400">
+                            ({unresolvedCount}/{items.length})
+                          </span>
+                        </div>
+                        {unresolvedCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setAllResolved(statusKey)}
+                            className="text-[10px] text-accent-green hover:underline"
+                          >
+                            全部处理
+                          </button>
+                        )}
+                      </div>
+                      <div className="space-y-1">
+                        {items.map(({ entry, idx }) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setActiveIdx(idx)}
+                            className={cn(
+                              "w-full text-left flex items-center gap-2 p-2 rounded-lg border transition-all",
+                              entry.resolved
+                                ? "bg-paper-50 border-paper-200 opacity-60"
+                                : "bg-white border-paper-200 hover:border-accent-orange/40 hover:shadow-sm",
+                              activeIdx === idx && "border-accent-orange bg-accent-orangeSoft/30",
+                            )}
+                          >
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleResolved(idx);
+                              }}
+                              className={cn(
+                                "w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-all",
+                                entry.resolved
+                                  ? "bg-accent-green border-accent-green text-white"
+                                  : "border-paper-300 hover:border-accent-orange",
+                              )}
+                            >
+                              {entry.resolved && <Check size={10} />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[11px] font-medium text-ink-700 flex items-center gap-1">
+                                <span className="font-mono text-ink-400">
+                                  {String(idx + 1).padStart(2, "0")}
+                                </span>
+                                <span className="truncate">
+                                  {entry.text?.trim()
+                                    ? entry.text.trim().split("\n")[0].slice(0, 20)
+                                    : "（仅状态标记）"}
+                                </span>
+                              </div>
+                              {entry.text?.trim() && entry.text.length > 20 && (
+                                <div className="text-[10px] text-ink-400 truncate">
+                                  {entry.text.trim().slice(20, 45)}…
+                                </div>
+                              )}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {effectiveFeedbackCount === 0 && (
+                  <div className="text-center text-[11px] text-ink-400 py-8">
+                    还没有任何反馈
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-3 grid grid-cols-3 gap-2 content-start">
+                {pages.map((p, i) => {
+                  const active = activeIdx === i;
+                  const entry = feedback[i] || { text: "", status: null };
+                  const hasFb = entry.text?.trim();
+                  const hasStatus = entry.status;
+                  const isResolved = entry.resolved;
+                  return (
+                    <button
+                      type="button"
+                      key={i}
+                      onClick={() => setActiveIdx(i)}
+                      className={cn(
+                        "relative rounded-lg overflow-hidden border-2 transition-all",
+                        active
+                          ? "border-accent-orange shadow-paperHover scale-[1.02] z-10"
+                          : hasStatus
+                            ? cn(`${FEEDBACK_STATUS_META[hasStatus].borderColor}`, "border-2")
+                            : "border-paper-300 hover:border-ink-300",
+                        isResolved && "opacity-60",
+                      )}
+                    >
+                      <div className="aspect-[3/4] bg-paper-200 relative">
+                        <img
+                          src={p.i}
+                          alt={`第 ${i + 1} 页`}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                        {isResolved && (
+                          <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                            <div className="w-6 h-6 rounded-full bg-accent-green text-white flex items-center justify-center shadow-lg">
+                              <Check size={13} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="absolute top-1 left-1 w-5 h-5 rounded bg-paper-50/90 text-[10px] font-semibold text-ink-700 flex items-center justify-center tabular-nums">
+                        {i + 1}
+                      </div>
+                      {hasFb && !isResolved && (
+                        <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-accent-green text-white flex items-center justify-center shadow-paper">
+                          <MessageSquare size={10} />
+                        </div>
+                      )}
+                      {hasStatus && (
+                        <div
+                          className={cn(
+                            "absolute bottom-1 right-1 px-1 py-0.5 rounded text-white text-[9px] font-medium shadow-paper",
+                            FEEDBACK_STATUS_META[hasStatus].color,
+                          )}
+                        >
+                          {FEEDBACK_STATUS_META[hasStatus].icon}
+                        </div>
+                      )}
+                      {p.t && (
+                        <div
+                          className={`absolute bottom-1 left-1 tag-chip !px-1.5 !py-0.5 ${TAG_META[p.t].color}`}
+                        >
+                          <span className="text-[9px]">
+                            {TAG_META[p.t].icon}
+                          </span>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {hasAnyFeedback && (
               <div className="p-3 border-t border-paper-200 bg-paper-100/60">
                 <div className="text-[11px] text-ink-500 mb-2 font-serif font-medium">
-                  📋 已写反馈的页
+                  📋 已处理的页
                 </div>
                 <div className="flex flex-wrap gap-1 max-h-[120px] overflow-y-auto">
-                  {feedback.map((entry, i) =>
-                    entry?.text?.trim() ? (
+                  {feedback.map((entry, i) => {
+                    const hasText = entry?.text?.trim();
+                    const hasStatus = entry?.status;
+                    if (!hasText && !hasStatus) return null;
+                    return (
                       <span
                         key={i}
                         onClick={() => setActiveIdx(i)}
                         className={cn(
                           "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium cursor-pointer transition-colors",
-                          entry.status
-                            ? `${FEEDBACK_STATUS_META[entry.status].softColor} text-ink-700 hover:opacity-80`
+                          hasStatus
+                            ? `${FEEDBACK_STATUS_META[hasStatus].softColor} text-ink-700 hover:opacity-80`
                             : "bg-accent-greenSoft text-accent-green hover:bg-accent-green hover:text-white",
                         )}
                       >
                         <span>
-                          {entry.status
-                            ? `${FEEDBACK_STATUS_META[entry.status].icon} `
+                          {hasStatus
+                            ? `${FEEDBACK_STATUS_META[hasStatus].icon} `
                             : ""}
                         </span>
                         第 {i + 1} 页
-                        <span className="opacity-60">
-                          · {entry.text.trim().length} 字
-                        </span>
+                        {hasText && (
+                          <span className="opacity-60">
+                            · {entry.text.trim().length} 字
+                          </span>
+                        )}
                       </span>
-                    ) : null,
-                  )}
+                    );
+                  })}
                 </div>
               </div>
             )}

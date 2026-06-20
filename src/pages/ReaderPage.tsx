@@ -18,6 +18,7 @@ import {
   TrendingUp,
   Bomb,
   AlertTriangle,
+  Save,
 } from "lucide-react";
 import { useComicStore } from "@/store/comicStore";
 import { TAG_META, PLATFORM_META, READ_DIRECTION_META, type ComicPage, type ReadMode } from "@/types";
@@ -198,9 +199,12 @@ export default function ReaderPage() {
   const setReadMode = useComicStore((s) => s.setReadMode);
   const setPauseDuration = useComicStore((s) => s.setPauseDuration);
   const readingLog = useComicStore((s) => s.readingLog);
+  const readingSnapshots = useComicStore((s) => s.readingSnapshots);
   const logPageEnter = useComicStore((s) => s.logPageEnter);
   const logPageLeave = useComicStore((s) => s.logPageLeave);
   const resetReadingLog = useComicStore((s) => s.resetReadingLog);
+  const saveReadingSnapshot = useComicStore((s) => s.saveReadingSnapshot);
+  const clearReadingSnapshots = useComicStore((s) => s.clearReadingSnapshots);
 
   const pages = useMemo(
     () => [...(work?.pages ?? [])].sort((a, b) => a.index - b.index),
@@ -211,6 +215,7 @@ export default function ReaderPage() {
   const [dir, setDir] = useState<"next" | "prev" | null>(null);
   const [autoRunning, setAutoRunning] = useState(false);
   const [showReview, setShowReview] = useState(false);
+  const currentIdxRef = useRef(0);
   const timerRef = useRef<number | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
   const touchStartX = useRef<number | null>(null);
@@ -220,29 +225,36 @@ export default function ReaderPage() {
   const progress = total > 0 ? ((currentIdx + 1) / total) * 100 : 0;
 
   useEffect(() => {
+    currentIdxRef.current = currentIdx;
+  }, [currentIdx]);
+
+  useEffect(() => {
     logPageEnter(0);
-    return () => logPageLeave(0);
+    return () => {
+      logPageLeave(currentIdxRef.current);
+    };
   }, [logPageEnter, logPageLeave]);
 
   const goNext = () => {
     if (currentIdx < total - 1) {
       logPageLeave(currentIdx);
       setDir("next");
-      setCurrentIdx((i) => i + 1);
-      setTimeout(() => logPageEnter(currentIdx + 1), 50);
+      const nextIdx = currentIdx + 1;
+      setCurrentIdx(nextIdx);
+      setTimeout(() => logPageEnter(nextIdx), 50);
     } else {
       setAutoRunning(false);
-      if (readingLog.length > 0) {
-        setShowReview(true);
-      }
+      logPageLeave(currentIdx);
+      setShowReview(true);
     }
   };
   const goPrev = () => {
     if (currentIdx > 0) {
       logPageLeave(currentIdx);
       setDir("prev");
-      setCurrentIdx((i) => i - 1);
-      setTimeout(() => logPageEnter(currentIdx - 1), 50);
+      const prevIdx = currentIdx - 1;
+      setCurrentIdx(prevIdx);
+      setTimeout(() => logPageEnter(prevIdx), 50);
     }
   };
 
@@ -559,6 +571,9 @@ export default function ReaderPage() {
             <ReviewPanel
               pages={pages}
               readingLog={readingLog}
+              snapshots={readingSnapshots}
+              onSaveSnapshot={() => saveReadingSnapshot()}
+              onClearSnapshots={() => clearReadingSnapshots()}
               onClose={() => setShowReview(false)}
               onReset={() => {
                 resetReadingLog();
@@ -581,20 +596,34 @@ export default function ReaderPage() {
 }
 
 /* ---------------- 复盘视图组件 ---------------- */
+type ReadingSnapshot = {
+  id: string;
+  name: string;
+  createdAt: number;
+  log: { pageIdx: number; enterTime: number; leaveTime: number }[];
+};
+
 function ReviewPanel({
   pages,
   readingLog,
+  snapshots,
+  onSaveSnapshot,
+  onClearSnapshots,
   onClose,
   onReset,
   onJump,
 }: {
   pages: ComicPage[];
   readingLog: { pageIdx: number; enterTime: number; leaveTime: number }[];
+  snapshots: ReadingSnapshot[];
+  onSaveSnapshot: () => void;
+  onClearSnapshots: () => void;
   onClose: () => void;
   onReset: () => void;
   onJump: (idx: number) => void;
 }) {
   const total = pages.length;
+  const half = Math.ceil(total / 2);
 
   const tagStats = useMemo(() => {
     const stat: Record<string, number> = {};
@@ -604,10 +633,39 @@ function ReviewPanel({
     return stat;
   }, [pages]);
 
+  /* 前后半标签密度对比 */
+  const halfTagStats = useMemo(() => {
+    const first: Record<string, number> = {};
+    const second: Record<string, number> = {};
+    pages.forEach((p, i) => {
+      if (!p.tag) return;
+      if (i < half) {
+        first[p.tag] = (first[p.tag] || 0) + 1;
+      } else {
+        second[p.tag] = (second[p.tag] || 0) + 1;
+      }
+    });
+    return { first, second };
+  }, [pages, half]);
+
   const climaxIndices = useMemo(
     () => pages.map((p, i) => (p.tag === "climax" ? i : -1)).filter((i) => i >= 0),
     [pages],
   );
+
+  /* 爆点间隔分析 */
+  const climaxIntervals = useMemo(() => {
+    if (climaxIndices.length < 2) return [];
+    const intervals: Array<{ from: number; to: number; pages: number }> = [];
+    for (let i = 1; i < climaxIndices.length; i++) {
+      intervals.push({
+        from: climaxIndices[i - 1],
+        to: climaxIndices[i],
+        pages: climaxIndices[i] - climaxIndices[i - 1],
+      });
+    }
+    return intervals;
+  }, [climaxIndices]);
 
   const pageDurations = useMemo(() => {
     return pages.map((p, idx) => {
@@ -634,6 +692,24 @@ function ReviewPanel({
     if (climaxIndices.length > 0 && climaxIndices[0] > total * 0.6) {
       issues.push("第一个爆点出现太晚（超过 60% 位置），前半段节奏可能偏松");
     }
+
+    /* 前后半对比相关 */
+    const firstClimaxes = halfTagStats.first.climax || 0;
+    const secondClimaxes = halfTagStats.second.climax || 0;
+    if (firstClimaxes === 0 && secondClimaxes > 1) {
+      issues.push("前半段没有爆点，全部集中在后半段，前松后紧感会很强");
+    }
+    if (climaxIntervals.length > 0) {
+      const avgInterval =
+        climaxIntervals.reduce((sum, it) => sum + it.pages, 0) / climaxIntervals.length;
+      if (avgInterval < 3) {
+        issues.push(`爆点间隔平均只有 ${avgInterval.toFixed(1)} 页，太密了`);
+      }
+      if (avgInterval > total * 0.4) {
+        issues.push(`爆点间隔平均 ${avgInterval.toFixed(0)} 页，悬念拉得太长`);
+      }
+    }
+
     const slowPages = pageDurations.filter((d) => d.duration > avgDuration * 1.8 && d.duration > 0);
     if (slowPages.length > 2) {
       issues.push(`有 ${slowPages.length} 页停留时间显著偏长，可能信息量过大或节奏拖沓`);
@@ -649,7 +725,7 @@ function ReviewPanel({
       issues.push(`铺垫页偏多（${setupPages}/${total}），前半段可能太平`);
     }
     return issues;
-  }, [climaxIndices, total, pageDurations, avgDuration, pages]);
+  }, [climaxIndices, total, pageDurations, avgDuration, pages, halfTagStats, climaxIntervals]);
 
   const maxDuration = Math.max(...pageDurations.map((d) => d.duration), 1);
 
@@ -678,6 +754,15 @@ function ReviewPanel({
               </div>
             </div>
             <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onSaveSnapshot}
+                disabled={readingLog.length === 0}
+                className="btn-ghost !py-1 !px-2 !text-[11px] border border-accent-green/30 text-accent-green disabled:opacity-40 disabled:cursor-not-allowed"
+                title="保存这次的阅读记录，下次可以对比"
+              >
+                💾 保存记录
+              </button>
               <button
                 type="button"
                 onClick={onReset}
@@ -752,6 +837,73 @@ function ReviewPanel({
             </div>
           </div>
 
+          {/* 前后半节奏对比 */}
+          <div>
+            <div className="text-xs font-medium text-ink-700 mb-2.5 flex items-center gap-1.5">
+              <BarChart3 size={12} className="text-accent-blue" />
+              前后半节奏对比
+              <span className="text-[10px] text-ink-400 font-normal">
+                （前 {half} 页 vs 后 {total - half} 页）
+              </span>
+            </div>
+            <div className="rounded-xl border border-paper-200 bg-paper-50 overflow-hidden">
+              <div className="grid grid-cols-3 text-[10px] text-ink-500 border-b border-paper-200">
+                <div className="p-2">标签</div>
+                <div className="p-2 text-center">前半段</div>
+                <div className="p-2 text-center">后半段</div>
+              </div>
+              {Object.keys(tagStats).length > 0 ? (
+                <div className="divide-y divide-paper-100">
+                  {Object.keys(tagStats).map((tag) => {
+                    const meta = TAG_META[tag as keyof typeof TAG_META];
+                    const firstCount = halfTagStats.first[tag] || 0;
+                    const secondCount = halfTagStats.second[tag] || 0;
+                    const firstPct = half > 0 ? (firstCount / half) * 100 : 0;
+                    const secondPct =
+                      total - half > 0 ? (secondCount / (total - half)) * 100 : 0;
+                    const diff = secondPct - firstPct;
+                    const diffText =
+                      Math.abs(diff) < 5
+                        ? "—"
+                        : diff > 0
+                          ? `后半多 ${diff.toFixed(0)}%`
+                          : `前半多 ${Math.abs(diff).toFixed(0)}%`;
+                    const diffColor =
+                      Math.abs(diff) < 5
+                        ? "text-ink-400"
+                        : diff > 0
+                          ? "text-accent-orange"
+                          : "text-accent-blue";
+                    return (
+                      <div key={tag} className="grid grid-cols-3 items-center p-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className={cn("w-2.5 h-2.5 rounded-full", meta.color)} />
+                          <span className="text-[11px] text-ink-600">{meta.label}</span>
+                        </div>
+                        <div className="text-center">
+                          <div className="font-mono text-[12px] font-semibold text-ink-700">
+                            {firstCount}
+                          </div>
+                          <div className="text-[9px] text-ink-400">{firstPct.toFixed(0)}%</div>
+                        </div>
+                        <div className="text-center">
+                          <div className="font-mono text-[12px] font-semibold text-ink-700">
+                            {secondCount}
+                          </div>
+                          <div className={cn("text-[9px]", diffColor)}>{diffText}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-[11px] text-ink-400 text-center py-4">
+                  还没有标签数据
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* 爆点位置 */}
           <div>
             <div className="text-xs font-medium text-ink-700 mb-2.5 flex items-center gap-1.5">
@@ -794,6 +946,44 @@ function ReviewPanel({
                     💥 第 {idx + 1} 页 · {(idx / total) * 100 | 0}% 位置
                   </button>
                 ))}
+              </div>
+            )}
+
+            {/* 爆点间隔 */}
+            {climaxIntervals.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-paper-200">
+                <div className="text-[11px] font-medium text-ink-600 mb-2">爆点间隔</div>
+                <div className="flex flex-wrap gap-2">
+                  {climaxIntervals.map((it, i) => {
+                    const isTight = it.pages < 3;
+                    const isLoose = it.pages > total * 0.3;
+                    const colorClass = isTight
+                      ? "border-red-200 bg-red-50 text-red-600"
+                      : isLoose
+                        ? "border-amber-200 bg-amber-50 text-amber-600"
+                        : "border-paper-200 bg-paper-50 text-ink-600";
+                    return (
+                      <div
+                        key={i}
+                        className={cn(
+                          "px-2.5 py-1.5 rounded-lg border text-[11px] font-mono",
+                          colorClass,
+                        )}
+                      >
+                        {it.from + 1} → {it.to + 1}
+                        <span className="ml-1.5 font-bold">{it.pages} 页</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 text-[10px] text-ink-400">
+                  平均间隔{" "}
+                  {(
+                    climaxIntervals.reduce((sum, it) => sum + it.pages, 0) /
+                    climaxIntervals.length
+                  ).toFixed(1)}{" "}
+                  页
+                </div>
               </div>
             )}
           </div>
@@ -871,6 +1061,75 @@ function ReviewPanel({
               </span>
             </div>
           </div>
+
+          {/* 阅读记录快照 */}
+          {snapshots.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-ink-700 mb-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Save size={12} className="text-accent-blue" />
+                  已保存的阅读记录
+                  <span className="text-[10px] text-ink-400 font-normal">
+                    （{snapshots.length} 次）
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={onClearSnapshots}
+                  className="text-[10px] text-ink-400 hover:text-red-500 transition-colors"
+                >
+                  清空全部
+                </button>
+              </div>
+              <div className="space-y-2">
+                {snapshots.map((snap) => {
+                  const validLogs = snap.log.filter((l) => l.leaveTime > 0 && l.enterTime > 0);
+                  const snapAvg =
+                    validLogs.length > 0
+                      ? validLogs.reduce((sum, l) => sum + (l.leaveTime - l.enterTime), 0) /
+                        validLogs.length /
+                        1000
+                      : 0;
+                  const dateStr = new Date(snap.createdAt).toLocaleString("zh-CN", {
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
+                  return (
+                    <div
+                      key={snap.id}
+                      className="rounded-xl border border-paper-200 bg-paper-50 p-2.5"
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm">📖</span>
+                          <span className="text-[11px] font-medium text-ink-700">
+                            {snap.name}
+                          </span>
+                        </div>
+                        <span className="text-[9px] text-ink-400">{dateStr}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-[10px] text-ink-500">
+                        <span>读了 {validLogs.length} 页</span>
+                        <span>平均 {snapAvg.toFixed(1)}s</span>
+                        <span>
+                          {snap.log.filter((l) => {
+                            const p = pages[l.pageIdx];
+                            return p?.tag === "climax";
+                          }).length}{" "}
+                          个爆点
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-2 text-[10px] text-ink-400 leading-relaxed">
+                💡 保存当前阅读记录，再重新读一遍，就可以对比两次的节奏感受
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </motion.div>

@@ -43,18 +43,50 @@ export default function PagesCheck() {
   }, [work]);
 
   const scrollToPage = (pageIdx: number) => {
-    if (!work) return;
-    const page = work.pages[pageIdx];
-    if (!page) return;
-    selectPage(page.id);
+    scrollToPages([pageIdx]);
+  };
+
+  const scrollToPages = (pageIndices: number[]) => {
+    if (!work || pageIndices.length === 0) return;
+    const sorted = [...pageIndices].sort((a, b) => a - b);
+    const midIdx = sorted[Math.floor(sorted.length / 2)];
+    const midPage = work.pages[midIdx];
+    if (!midPage) return;
+    selectPage(midPage.id);
+
     requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-page-id="${page.id}"]`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
-        el.classList.add("ring-2", "ring-accent-orange", "ring-offset-2", "ring-offset-paper-50");
-        setTimeout(() => {
-          el.classList.remove("ring-2", "ring-accent-orange", "ring-offset-2", "ring-offset-paper-50");
-        }, 2500);
+      const els: Element[] = [];
+      sorted.forEach((idx) => {
+        const page = work.pages[idx];
+        if (page) {
+          const el = document.querySelector(`[data-page-id="${page.id}"]`);
+          if (el) {
+            els.push(el);
+            el.classList.add(
+              "ring-2",
+              "ring-accent-orange",
+              "ring-offset-2",
+              "ring-offset-paper-50",
+            );
+            setTimeout(() => {
+              el.classList.remove(
+                "ring-2",
+                "ring-accent-orange",
+                "ring-offset-2",
+                "ring-offset-paper-50",
+              );
+            }, 2500);
+          }
+        }
+      });
+
+      const midEl = els[Math.floor(els.length / 2)];
+      if (midEl) {
+        midEl.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+          inline: "center",
+        });
       }
     });
   };
@@ -158,6 +190,16 @@ export default function PagesCheck() {
                 {issue.relatedPageIndices && issue.relatedPageIndices.length > 0 && (
                   <div className="mt-2 flex items-center gap-1.5 flex-wrap">
                     <span className="text-[10px] text-ink-400">相关页：</span>
+                    {issue.relatedPageIndices.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => scrollToPages(issue.relatedPageIndices!)}
+                        className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md bg-accent-orangeSoft border border-accent-orange/30 text-[10px] font-medium text-accent-orange hover:bg-accent-orange hover:text-white transition-colors shadow-sm"
+                      >
+                        <Crosshair size={9} />
+                        全部定位 ({issue.relatedPageIndices.length} 页)
+                      </button>
+                    )}
                     {issue.relatedPageIndices.map((pi) => (
                       <button
                         key={pi}
@@ -165,7 +207,6 @@ export default function PagesCheck() {
                         onClick={() => scrollToPage(pi)}
                         className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md bg-white border border-paper-300 text-[10px] font-medium text-ink-600 hover:border-accent-orange hover:text-accent-orange transition-colors shadow-sm"
                       >
-                        <Crosshair size={9} />
                         第 {pi + 1} 页
                       </button>
                     ))}

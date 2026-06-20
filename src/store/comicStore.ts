@@ -70,6 +70,9 @@ interface ComicState {
   logPageEnter: (pageIdx: number) => void;
   logPageLeave: (pageIdx: number) => void;
   resetReadingLog: () => void;
+  saveReadingSnapshot: (name?: string) => void;
+  readingSnapshots: Array<{ id: string; name: string; createdAt: number; log: { pageIdx: number; enterTime: number; leaveTime: number }[] }>;
+  clearReadingSnapshots: () => void;
 
   // 分享
   generateShareLink: (mode?: ShareMode) => ShareResult;
@@ -109,6 +112,7 @@ export const useComicStore = create<ComicState>((set, get) => ({
   pauseDuration: 3,
   isUploading: false,
   readingLog: [],
+  readingSnapshots: [],
 
   createWork: (data = {}) => {
     const work = {
@@ -285,6 +289,20 @@ export const useComicStore = create<ComicState>((set, get) => ({
   },
 
   resetReadingLog: () => set({ readingLog: [] }),
+
+  saveReadingSnapshot: (name) => {
+    const { readingLog, readingSnapshots } = get();
+    if (readingLog.length === 0) return;
+    const snap = {
+      id: uid("snap_"),
+      name: name || `第 ${readingSnapshots.length + 1} 次阅读`,
+      createdAt: Date.now(),
+      log: [...readingLog],
+    };
+    set({ readingSnapshots: [...readingSnapshots, snap] });
+  },
+
+  clearReadingSnapshots: () => set({ readingSnapshots: [] }),
 
   generateShareLink: (mode) => {
     const { currentWork } = get();

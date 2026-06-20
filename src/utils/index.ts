@@ -372,6 +372,7 @@ export function exportStandaloneHtml(
 export interface FeedbackEntry {
   text: string;
   status: FeedbackStatus | null;
+  resolved?: boolean;
 }
 
 const DRAFT_PREFIX = "comic_feedback_draft_";
@@ -425,16 +426,23 @@ export function exportFeedbackText(
   lines.push(`总页数：${pkg.pg.length}`);
 
   const statusCounts: Record<string, number> = {};
+  let resolvedCount = 0;
+  let totalWithFeedback = 0;
   entries.forEach((e) => {
     if (e.status) statusCounts[e.status] = (statusCounts[e.status] || 0) + 1;
+    if (e.status || e.text?.trim()) totalWithFeedback++;
+    if (e.resolved) resolvedCount++;
   });
-  if (Object.keys(statusCounts).length > 0) {
+  if (Object.keys(statusCounts).length > 0 || resolvedCount > 0) {
     lines.push("");
     lines.push("📊 审稿统计：");
     (["review", "revise", "pass"] as const).forEach((s) => {
       const meta = FEEDBACK_STATUS_META[s];
       lines.push(`   ${meta.icon} ${meta.label}：${statusCounts[s] || 0} 页`);
     });
+    if (totalWithFeedback > 0) {
+      lines.push(`   ✅ 处理进度：${resolvedCount} / ${totalWithFeedback} 已处理`);
+    }
   }
   lines.push("");
 
@@ -459,10 +467,20 @@ export function exportFeedbackText(
     lines.push("");
     items.forEach(({ idx, p, entry }) => {
       const tagStr = p.t ? ` [${TAG_EMOJI[p.t]} ${TAG_LABEL[p.t]}]` : "";
-      lines.push(`── 第 ${idx + 1} 页${tagStr} ──`);
+      const resolvedMark = entry.resolved ? "✓" : "⏳";
+      const hasContent = p.c || entry.text?.trim() || entry.status;
+      const statusLabel = entry.status
+        ? ` [${FEEDBACK_STATUS_META[entry.status].label}]`
+        : "";
+      lines.push(
+        `── ${hasContent ? resolvedMark + " " : ""}第 ${idx + 1} 页${tagStr}${statusLabel} ──`,
+      );
+      if (entry.resolved && hasContent) {
+        lines.push(`   ✅ 已处理`);
+      }
       if (p.c) lines.push(`💭 作者担心：${p.c}`);
       if (entry.text?.trim()) lines.push(`💬 编辑反馈：${entry.text.trim()}`);
-      if (!p.c && !entry.text?.trim()) lines.push(`   (无备注)`);
+      if (!p.c && !entry.text?.trim() && !entry.status) lines.push(`   (无备注)`);
       lines.push("");
     });
   });
@@ -600,34 +618,42 @@ export function checkPages(
     const fileNumSequence = pageInfo
       .filter((p) => p.fileNum != null)
       .sort((a, b) => a.index - b.index)
-      .map((p) => p.fileNum as number);
+      .map((p) => ({ idx: p.idx, fileNum: p.fileNum as number, fileName: p.fileName }));
 
-    const outOfOrder: Array<{ idx: number; expected: number; actual: number }> = [];
+    const outOfOrderPairs: Array<{ prevIdx: number; prevNum: number; currIdx: number; currNum: number }> = [];
     for (let i = 1; i < fileNumSequence.length; i++) {
-      if (fileNumSequence[i] < fileNumSequence[i - 1]) {
-        const pageWithThisNum = pageInfo.find((p) => p.fileNum === fileNumSequence[i]);
-        if (pageWithThisNum) {
-          outOfOrder.push({
-            idx: pageWithThisNum.idx,
-            expected: fileNumSequence[i - 1] + 1,
-            actual: fileNumSequence[i],
-          });
-        }
+      if (fileNumSequence[i].fileNum < fileNumSequence[i - 1].fileNum) {
+        outOfOrderPairs.push({
+          prevIdx: fileNumSequence[i - 1].idx,
+          prevNum: fileNumSequence[i - 1].fileNum,
+          currIdx: fileNumSequence[i].idx,
+          currNum: fileNumSequence[i].fileNum,
+        });
       }
     }
 
-    if (outOfOrder.length > 0) {
-      const first = outOfOrder[0];
-      const pageNames = outOfOrder
-        .slice(0, 3)
-        .map((o) => pageInfo[o.idx]?.fileName.replace(/\.[^.]+$/, ""))
-        .filter(Boolean);
-      const related = outOfOrder.map((o) => o.idx).slice(0, 5);
+    if (outOfOrderPairs.length > 0) {
+      const firstPair = outOfOrderPairs[0];
+      const relatedSet = new Set<number>();
+      outOfOrderPairs.slice(0, 3).forEach((p) => {
+        relatedSet.add(p.prevIdx);
+        relatedSet.add(p.currIdx);
+      });
+      const related = Array.from(relatedSet).slice(0, 6).sort((a, b) => a - b);
+
+      const examples = outOfOrderPairs
+        .slice(0, 2)
+        .map(
+          (p) =>
+            `第${p.currIdx + 1}位（编号${p.currNum}）排在第${p.prevIdx + 1}位（编号${p.prevNum}）前面`,
+        )
+        .join("；");
+
       issues.push({
         type: "order",
         severity: "warn",
-        message: `页序可能错位：${pageNames.join("、")}${outOfOrder.length > 3 ? " 等" : ""} 顺序不对`,
-        detail: `文件名编号是 ${first.actual}，但当前排列在应该是 ${first.expected} 的位置，可能是拖放时放错了顺序`,
+        message: `页序错位：发现 ${outOfOrderPairs.length} 处排列顺序与文件名编号不符`,
+        detail: `例如 ${examples}。建议对照文件名编号重新拖放调整，确保阅读顺序正确。`,
         relatedPageIndices: related,
       });
     }
