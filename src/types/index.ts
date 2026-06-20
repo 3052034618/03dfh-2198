@@ -35,6 +35,38 @@ export interface Work {
 
 export type ReadMode = "flip" | "pause";
 
+export type FeedbackStatus = "pass" | "revise" | "review";
+
+export const FEEDBACK_STATUS_META: Record<
+  FeedbackStatus,
+  { label: string; icon: string; color: string; softColor: string; borderColor: string; priority: number }
+> = {
+  review: {
+    label: "重点重看",
+    icon: "🔴",
+    color: "bg-red-500",
+    softColor: "bg-red-50",
+    borderColor: "border-red-300",
+    priority: 0,
+  },
+  revise: {
+    label: "需要修改",
+    icon: "🟡",
+    color: "bg-amber-500",
+    softColor: "bg-amber-50",
+    borderColor: "border-amber-300",
+    priority: 1,
+  },
+  pass: {
+    label: "通过",
+    icon: "🟢",
+    color: "bg-emerald-500",
+    softColor: "bg-emerald-50",
+    borderColor: "border-emerald-300",
+    priority: 2,
+  },
+};
+
 export interface SharePackage {
   t: string;
   p: Platform;

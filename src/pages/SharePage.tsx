@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Share2,
@@ -17,15 +17,27 @@ import {
   Send,
   BookMarked,
   AlertCircle,
+  HardDrive,
+  Trash2,
 } from "lucide-react";
 import { useComicStore } from "@/store/comicStore";
 import {
   TAG_META,
   PLATFORM_META,
   READ_DIRECTION_META,
+  FEEDBACK_STATUS_META,
   type SharePackage,
+  type FeedbackStatus,
 } from "@/types";
-import { buildStandaloneHtml, exportFeedbackText, cn } from "@/utils";
+import {
+  buildStandaloneHtml,
+  exportFeedbackText,
+  saveFeedbackDraft,
+  loadFeedbackDraft,
+  clearFeedbackDraft,
+  type FeedbackEntry,
+  cn,
+} from "@/utils";
 import { motion, AnimatePresence } from "framer-motion";
 
 type Props = { mode: "long" | "short" };
@@ -36,13 +48,19 @@ export default function SharePage({ mode }: Props) {
   const loadFromShare = useComicStore((s) => s.loadFromShare);
   const loadFromShort = useComicStore((s) => s.loadFromShortShare);
   const setWorkFromShare = useComicStore((s) => s.setWorkFromShare);
-  const exportFeedbackSummary = useComicStore((s) => s.exportFeedbackSummary);
 
   const [pkg, setPkg] = useState<SharePackage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeIdx, setActiveIdx] = useState(0);
-  const [feedback, setFeedback] = useState<string[]>([]);
+  const [feedback, setFeedback] = useState<FeedbackEntry[]>([]);
   const [copied, setCopied] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+
+  const shareKey = useMemo(() => {
+    const id = (params as { id?: string }).id || "";
+    const data = (params as { data?: string }).data || "";
+    return mode === "short" ? `short_${id}` : `long_${data.slice(0, 40)}`;
+  }, [mode, params]);
 
   useEffect(() => {
     try {
@@ -65,29 +83,52 @@ export default function SharePage({ mode }: Props) {
         }
       }
       setPkg(loaded);
-      setFeedback(new Array(loaded.pg.length).fill(""));
+      const draft = loadFeedbackDraft(shareKey, loaded.pg.length);
+      setFeedback(draft);
     } catch {
       setError("解析分享数据失败。");
     }
-  }, [mode, params, loadFromShare, loadFromShort]);
+  }, [mode, params, loadFromShare, loadFromShort, shareKey]);
+
+  useEffect(() => {
+    if (!pkg || feedback.length !== pkg.pg.length) return;
+    saveFeedbackDraft(shareKey, feedback);
+    setDraftSavedAt(Date.now());
+  }, [feedback, pkg, shareKey]);
 
   const pages = useMemo(() => pkg?.pg ?? [], [pkg]);
   const current = pages[activeIdx];
   const progress = pages.length ? ((activeIdx + 1) / pages.length) * 100 : 0;
 
-  const setFb = (i: number, v: string) => {
+  const setFbText = useCallback((i: number, text: string) => {
     setFeedback((arr) => {
       const n = [...arr];
-      n[i] = v;
+      n[i] = { ...n[i], text };
       return n;
     });
-  };
+  }, []);
 
-  const feedbackCount = feedback.filter((t) => t?.trim()).length;
+  const setFbStatus = useCallback((i: number, status: FeedbackStatus | null) => {
+    setFeedback((arr) => {
+      const n = [...arr];
+      n[i] = { ...n[i], status };
+      return n;
+    });
+  }, []);
+
+  const feedbackCount = feedback.filter((t) => t?.text?.trim()).length;
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { review: 0, revise: 0, pass: 0 };
+    feedback.forEach((f) => {
+      if (f.status) counts[f.status] = (counts[f.status] || 0) + 1;
+    });
+    return counts;
+  }, [feedback]);
 
   const downloadHtmlWithFeedback = () => {
     if (!pkg) return;
-    const html = buildStandaloneHtml(pkg, feedback);
+    const texts = feedback.map((f) => f.text || "");
+    const html = buildStandaloneHtml(pkg, texts);
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -101,12 +142,7 @@ export default function SharePage({ mode }: Props) {
 
   const exportText = () => {
     if (!pkg) return;
-    try {
-      exportFeedbackSummary(feedback);
-    } catch {
-      /* fallback: 直接从这里调用 */
-      exportFeedbackText(pkg, feedback, pkg.t || "分镜审稿反馈");
-    }
+    exportFeedbackText(pkg, feedback, pkg.t || "分镜审稿反馈");
   };
 
   const copySummary = async () => {
@@ -119,6 +155,13 @@ export default function SharePage({ mode }: Props) {
     } catch {
       /* ignore */
     }
+  };
+
+  const clearDraft = () => {
+    if (!pkg) return;
+    clearFeedbackDraft(shareKey);
+    setFeedback(Array.from({ length: pkg.pg.length }, () => ({ text: "", status: null })));
+    setDraftSavedAt(null);
   };
 
   const importToEdit = () => {
@@ -171,6 +214,8 @@ export default function SharePage({ mode }: Props) {
     );
   }
 
+  const currentEntry = feedback[activeIdx] || { text: "", status: null };
+
   return (
     <div className="min-h-full">
       <header className="px-4 md:px-8 pt-5 pb-4 flex items-center justify-between max-w-[1400px] mx-auto w-full flex-wrap gap-3">
@@ -192,6 +237,12 @@ export default function SharePage({ mode }: Props) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {draftSavedAt && (
+            <div className="text-[11px] text-ink-400 flex items-center gap-1 mr-1">
+              <HardDrive size={12} className="text-accent-green" />
+              已自动保存草稿
+            </div>
+          )}
           <button
             type="button"
             onClick={copySummary}
@@ -347,7 +398,7 @@ export default function SharePage({ mode }: Props) {
               </motion.div>
             )}
 
-            {/* 编辑反馈区 - 按页 */}
+            {/* 编辑反馈区 - 带状态 */}
             <motion.div
               key={activeIdx + "_fb"}
               initial={{ opacity: 0, y: 8 }}
@@ -375,22 +426,50 @@ export default function SharePage({ mode }: Props) {
                         </span>
                       )}
                     </div>
-                    {feedback[activeIdx]?.trim() && (
+                    {currentEntry.text?.trim() && (
                       <div className="text-[11px] text-accent-green flex items-center gap-1">
                         <Check size={11} /> 已记录
                       </div>
                     )}
                   </div>
+
+                  {/* 状态选择 */}
+                  <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+                    <span className="text-[11px] text-ink-500 mr-1">审稿状态：</span>
+                    {(["review", "revise", "pass"] as const).map((s) => {
+                      const meta = FEEDBACK_STATUS_META[s];
+                      const active = currentEntry.status === s;
+                      return (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() =>
+                            setFbStatus(activeIdx, active ? null : s)
+                          }
+                          className={cn(
+                            "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] border transition-all",
+                            active
+                              ? `${meta.color} text-white border-transparent shadow-paper`
+                              : `${meta.softColor} text-ink-600 ${meta.borderColor} hover:shadow-sm`,
+                          )}
+                        >
+                          <span>{meta.icon}</span>
+                          <span>{meta.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
                   <textarea
-                    value={feedback[activeIdx] || ""}
-                    onChange={(e) => setFb(activeIdx, e.target.value)}
+                    value={currentEntry.text || ""}
+                    onChange={(e) => setFbText(activeIdx, e.target.value)}
                     rows={4}
                     placeholder="试看后的感受：节奏快慢、画面清晰度、剧情是否看懂、悬念是否到位… 想到什么就写什么 📝"
                     className="input-field resize-none text-sm leading-relaxed bg-paper-100"
                   />
                   <div className="mt-2 flex items-center justify-between text-[11px] text-ink-400">
                     <span>
-                      {feedback[activeIdx]?.length || 0} 字
+                      {currentEntry.text?.length || 0} 字
                     </span>
                     <div className="flex items-center gap-2">
                       {activeIdx > 0 && (
@@ -427,26 +506,62 @@ export default function SharePage({ mode }: Props) {
           </section>
 
           <aside className="paper-card grain-overlay overflow-hidden flex flex-col max-h-[calc(100vh-10rem)]">
-            <div className="p-4 border-b border-paper-200 flex items-center justify-between">
-              <div>
-                <h3 className="font-serif font-semibold text-ink-900 text-sm">
-                  页序总览
-                </h3>
-                <div className="text-[11px] text-ink-400 mt-0.5">
-                  <span className="text-accent-green font-medium">
-                    {feedbackCount}
-                  </span>{" "}
-                  / {pages.length} 页已写反馈
+            <div className="p-4 border-b border-paper-200">
+              <div className="flex items-center justify-between mb-1.5">
+                <div>
+                  <h3 className="font-serif font-semibold text-ink-900 text-sm">
+                    页序总览
+                  </h3>
+                  <div className="text-[11px] text-ink-400 mt-0.5">
+                    <span className="text-accent-green font-medium">
+                      {feedbackCount}
+                    </span>{" "}
+                    / {pages.length} 页已写反馈
+                  </div>
+                </div>
+                <div className="text-[11px] text-ink-400 font-mono">
+                  {pages.length}
                 </div>
               </div>
-              <div className="text-[11px] text-ink-400 font-mono">
-                {pages.length}
+
+              {/* 状态统计 */}
+              <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-paper-100">
+                {(["review", "revise", "pass"] as const).map((s) => {
+                  const meta = FEEDBACK_STATUS_META[s];
+                  return (
+                    <span
+                      key={s}
+                      className={cn(
+                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px]",
+                        statusCounts[s] > 0
+                          ? `${meta.color} text-white`
+                          : `bg-paper-100 text-ink-400`,
+                      )}
+                    >
+                      <span>{meta.icon}</span>
+                      <span>{statusCounts[s] || 0}</span>
+                    </span>
+                  );
+                })}
+                {feedbackCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearDraft}
+                    className="ml-auto text-[10px] text-ink-400 hover:text-red-500 transition-colors flex items-center gap-0.5"
+                    title="清空所有反馈"
+                  >
+                    <Trash2 size={10} /> 清空
+                  </button>
+                )}
               </div>
             </div>
+
             <div className="flex-1 overflow-y-auto p-3 grid grid-cols-3 gap-2 content-start">
               {pages.map((p, i) => {
                 const active = activeIdx === i;
-                const hasFb = feedback[i]?.trim();
+                const entry = feedback[i] || { text: "", status: null };
+                const hasFb = entry.text?.trim();
+                const hasStatus = entry.status;
                 return (
                   <button
                     type="button"
@@ -456,7 +571,9 @@ export default function SharePage({ mode }: Props) {
                       "relative rounded-lg overflow-hidden border-2 transition-all",
                       active
                         ? "border-accent-orange shadow-paperHover scale-[1.02] z-10"
-                        : "border-paper-300 hover:border-ink-300",
+                        : hasStatus
+                          ? cn(`${FEEDBACK_STATUS_META[hasStatus].borderColor}`, "border-2")
+                          : "border-paper-300 hover:border-ink-300",
                     )}
                   >
                     <div className="aspect-[3/4] bg-paper-200">
@@ -475,9 +592,19 @@ export default function SharePage({ mode }: Props) {
                         <MessageSquare size={10} />
                       </div>
                     )}
+                    {hasStatus && (
+                      <div
+                        className={cn(
+                          "absolute bottom-1 right-1 px-1 py-0.5 rounded text-white text-[9px] font-medium shadow-paper",
+                          FEEDBACK_STATUS_META[hasStatus].color,
+                        )}
+                      >
+                        {FEEDBACK_STATUS_META[hasStatus].icon}
+                      </div>
+                    )}
                     {p.t && (
                       <div
-                        className={`absolute bottom-1 right-1 tag-chip !px-1.5 !py-0.5 ${TAG_META[p.t].color}`}
+                        className={`absolute bottom-1 left-1 tag-chip !px-1.5 !py-0.5 ${TAG_META[p.t].color}`}
                       >
                         <span className="text-[9px]">
                           {TAG_META[p.t].icon}
@@ -494,17 +621,27 @@ export default function SharePage({ mode }: Props) {
                 <div className="text-[11px] text-ink-500 mb-2 font-serif font-medium">
                   📋 已写反馈的页
                 </div>
-                <div className="flex flex-wrap gap-1 max-h-[88px] overflow-y-auto">
-                  {feedback.map((t, i) =>
-                    t?.trim() ? (
+                <div className="flex flex-wrap gap-1 max-h-[120px] overflow-y-auto">
+                  {feedback.map((entry, i) =>
+                    entry?.text?.trim() ? (
                       <span
                         key={i}
                         onClick={() => setActiveIdx(i)}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-accent-greenSoft text-accent-green text-[11px] font-medium cursor-pointer hover:bg-accent-green hover:text-white transition-colors"
+                        className={cn(
+                          "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium cursor-pointer transition-colors",
+                          entry.status
+                            ? `${FEEDBACK_STATUS_META[entry.status].softColor} text-ink-700 hover:opacity-80`
+                            : "bg-accent-greenSoft text-accent-green hover:bg-accent-green hover:text-white",
+                        )}
                       >
+                        <span>
+                          {entry.status
+                            ? `${FEEDBACK_STATUS_META[entry.status].icon} `
+                            : ""}
+                        </span>
                         第 {i + 1} 页
                         <span className="opacity-60">
-                          · {t.trim().length} 字
+                          · {entry.text.trim().length} 字
                         </span>
                       </span>
                     ) : null,
@@ -521,7 +658,7 @@ export default function SharePage({ mode }: Props) {
 
 function buildSummaryText(
   pkg: SharePackage,
-  feedback: string[],
+  entries: FeedbackEntry[],
 ): string {
   const TAG_LABEL: Record<string, string> = {
     setup: "铺垫",
@@ -557,22 +694,59 @@ function buildSummaryText(
       rtl: "从右到左（页漫）",
     }[pkg.d] || pkg.d;
 
+  const statusCounts: Record<string, number> = {};
+  entries.forEach((e) => {
+    if (e.status) statusCounts[e.status] = (statusCounts[e.status] || 0) + 1;
+  });
+
   const lines: string[] = [];
   lines.push("=".repeat(50));
   lines.push(`📖 ${pkg.t || "未命名作品"} - 审稿反馈摘要`);
   lines.push("=".repeat(50));
   lines.push(`生成：${new Date().toLocaleString("zh-CN")}`);
   lines.push(`平台：${platformLabel}　方向：${directionLabel}`);
-  lines.push(`页数：${pkg.pg.length}　有反馈：${feedback.filter((t) => t?.trim()).length} 页`);
+  lines.push(`页数：${pkg.pg.length}　有反馈：${entries.filter((t) => t?.text?.trim()).length} 页`);
+  if (Object.keys(statusCounts).length > 0) {
+    const parts: string[] = [];
+    (["review", "revise", "pass"] as const).forEach((s) => {
+      if (statusCounts[s]) {
+        const meta = FEEDBACK_STATUS_META[s];
+        parts.push(`${meta.icon} ${meta.label} ${statusCounts[s]}`);
+      }
+    });
+    lines.push(`审稿统计：${parts.join("　")}`);
+  }
   lines.push("");
+
+  const grouped: Record<string, Array<{ idx: number; p: SharePackage['pg'][number]; entry: FeedbackEntry }>> = {
+    review: [], revise: [], pass: [], unmarked: [],
+  };
   pkg.pg.forEach((p, i) => {
-    const tagStr = p.t ? ` [${TAG_EMOJI[p.t]} ${TAG_LABEL[p.t]}]` : "";
-    const fb = feedback[i]?.trim();
-    if (!p.c && !fb) return;
-    lines.push(`── 第 ${i + 1} 页${tagStr} ──`);
-    if (p.c) lines.push(`💭 作者：${p.c}`);
-    if (fb) lines.push(`💬 反馈：${fb}`);
+    const entry = entries[i] || { text: "", status: null };
+    const key = entry.status || "unmarked";
+    grouped[key].push({ idx: i, p, entry });
+  });
+
+  (["review", "revise", "pass", "unmarked"] as const).forEach((groupKey) => {
+    const items = grouped[groupKey];
+    const hasContent = items.some((it) => it.p.c || it.entry.text?.trim());
+    if (!hasContent) return;
+    const meta = groupKey === "unmarked"
+      ? { label: "未标注", icon: "⚪" }
+      : FEEDBACK_STATUS_META[groupKey];
+    lines.push(`${meta.icon} ${meta.label}`);
+    lines.push("-".repeat(40));
+    items.forEach(({ idx, p, entry }) => {
+      const tagStr = p.t ? ` [${TAG_EMOJI[p.t]} ${TAG_LABEL[p.t]}]` : "";
+      const text = entry.text?.trim();
+      if (!p.c && !text) return;
+      lines.push(`── 第 ${idx + 1} 页${tagStr} ──`);
+      if (p.c) lines.push(`💭 作者：${p.c}`);
+      if (text) lines.push(`💬 反馈：${text}`);
+      lines.push("");
+    });
     lines.push("");
   });
+
   return lines.join("\n");
 }

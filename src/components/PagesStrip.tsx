@@ -43,6 +43,7 @@ function PageThumbCard({
   return (
     <motion.div
       ref={setNodeRef}
+      data-page-id={page.id}
       style={style}
       onClick={(e) => {
         e.stopPropagation();

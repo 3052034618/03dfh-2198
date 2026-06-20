@@ -12,6 +12,12 @@ import {
   Sparkles,
   Volume2,
   Layers,
+  BarChart3,
+  RotateCcw,
+  Clock,
+  TrendingUp,
+  Bomb,
+  AlertTriangle,
 } from "lucide-react";
 import { useComicStore } from "@/store/comicStore";
 import { TAG_META, PLATFORM_META, READ_DIRECTION_META, type ComicPage, type ReadMode } from "@/types";
@@ -191,6 +197,10 @@ export default function ReaderPage() {
   const pauseDuration = useComicStore((s) => s.pauseDuration);
   const setReadMode = useComicStore((s) => s.setReadMode);
   const setPauseDuration = useComicStore((s) => s.setPauseDuration);
+  const readingLog = useComicStore((s) => s.readingLog);
+  const logPageEnter = useComicStore((s) => s.logPageEnter);
+  const logPageLeave = useComicStore((s) => s.logPageLeave);
+  const resetReadingLog = useComicStore((s) => s.resetReadingLog);
 
   const pages = useMemo(
     () => [...(work?.pages ?? [])].sort((a, b) => a.index - b.index),
@@ -200,6 +210,7 @@ export default function ReaderPage() {
   const [currentIdx, setCurrentIdx] = useState(0);
   const [dir, setDir] = useState<"next" | "prev" | null>(null);
   const [autoRunning, setAutoRunning] = useState(false);
+  const [showReview, setShowReview] = useState(false);
   const timerRef = useRef<number | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
   const touchStartX = useRef<number | null>(null);
@@ -208,18 +219,30 @@ export default function ReaderPage() {
   const total = pages.length;
   const progress = total > 0 ? ((currentIdx + 1) / total) * 100 : 0;
 
+  useEffect(() => {
+    logPageEnter(0);
+    return () => logPageLeave(0);
+  }, [logPageEnter, logPageLeave]);
+
   const goNext = () => {
     if (currentIdx < total - 1) {
+      logPageLeave(currentIdx);
       setDir("next");
       setCurrentIdx((i) => i + 1);
+      setTimeout(() => logPageEnter(currentIdx + 1), 50);
     } else {
       setAutoRunning(false);
+      if (readingLog.length > 0) {
+        setShowReview(true);
+      }
     }
   };
   const goPrev = () => {
     if (currentIdx > 0) {
+      logPageLeave(currentIdx);
       setDir("prev");
       setCurrentIdx((i) => i - 1);
+      setTimeout(() => logPageEnter(currentIdx - 1), 50);
     }
   };
 
@@ -291,7 +314,7 @@ export default function ReaderPage() {
 
   return (
     <div className="min-h-full flex flex-col">
-      <header className="px-4 md:px-8 pt-5 pb-4 flex items-center justify-between max-w-[1400px] mx-auto w-full">
+      <header className="px-4 md:px-8 pt-5 pb-4 flex items-center justify-between max-w-[1400px] mx-auto w-full gap-3">
         <button
           type="button"
           onClick={() => navigate("/upload")}
@@ -300,7 +323,7 @@ export default function ReaderPage() {
           <ArrowLeft size={16} />
           返回整理
         </button>
-        <div className="text-center">
+        <div className="text-center flex-1">
           <div className="font-serif text-ink-900 font-semibold leading-tight">
             {work.title || "未命名作品"}
           </div>
@@ -310,10 +333,26 @@ export default function ReaderPage() {
             <span>{READ_DIRECTION_META[work.readDirection].label}</span>
           </div>
         </div>
-        <div className="text-sm font-mono text-ink-400 tabular-nums">
-          <span className="text-ink-700 font-semibold">{currentIdx + 1}</span>
-          <span className="mx-1">/</span>
-          <span>{total}</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowReview((v) => !v)}
+            className={cn(
+              "btn-ghost !text-xs !px-3 !py-1.5",
+              showReview
+                ? "!bg-accent-green !text-white !border-transparent"
+                : "!text-ink-600",
+            )}
+            title="复盘视图"
+          >
+            <BarChart3 size={14} />
+            复盘
+          </button>
+          <div className="text-sm font-mono text-ink-400 tabular-nums min-w-[60px] text-right">
+            <span className="text-ink-700 font-semibold">{currentIdx + 1}</span>
+            <span className="mx-1">/</span>
+            <span>{total}</span>
+          </div>
         </div>
       </header>
 
@@ -513,7 +552,327 @@ export default function ReaderPage() {
             点击屏幕左右两侧 / 键盘方向键 / 手机滑动都可以翻页
           </div>
         </div>
+
+        {/* 复盘视图 */}
+        <AnimatePresence>
+          {showReview && (
+            <ReviewPanel
+              pages={pages}
+              readingLog={readingLog}
+              onClose={() => setShowReview(false)}
+              onReset={() => {
+                resetReadingLog();
+                setCurrentIdx(0);
+                setShowReview(false);
+              }}
+              onJump={(idx) => {
+                setShowReview(false);
+                logPageLeave(currentIdx);
+                setDir(idx > currentIdx ? "next" : "prev");
+                setCurrentIdx(idx);
+                setTimeout(() => logPageEnter(idx), 50);
+              }}
+            />
+          )}
+        </AnimatePresence>
       </main>
     </div>
+  );
+}
+
+/* ---------------- 复盘视图组件 ---------------- */
+function ReviewPanel({
+  pages,
+  readingLog,
+  onClose,
+  onReset,
+  onJump,
+}: {
+  pages: ComicPage[];
+  readingLog: { pageIdx: number; enterTime: number; leaveTime: number }[];
+  onClose: () => void;
+  onReset: () => void;
+  onJump: (idx: number) => void;
+}) {
+  const total = pages.length;
+
+  const tagStats = useMemo(() => {
+    const stat: Record<string, number> = {};
+    pages.forEach((p) => {
+      if (p.tag) stat[p.tag] = (stat[p.tag] || 0) + 1;
+    });
+    return stat;
+  }, [pages]);
+
+  const climaxIndices = useMemo(
+    () => pages.map((p, i) => (p.tag === "climax" ? i : -1)).filter((i) => i >= 0),
+    [pages],
+  );
+
+  const pageDurations = useMemo(() => {
+    return pages.map((p, idx) => {
+      const log = readingLog.find((l) => l.pageIdx === idx);
+      if (!log || !log.leaveTime || !log.enterTime) return { idx, duration: 0 };
+      return { idx, duration: (log.leaveTime - log.enterTime) / 1000 };
+    });
+  }, [pages, readingLog]);
+
+  const avgDuration = useMemo(() => {
+    const valid = pageDurations.filter((d) => d.duration > 0);
+    if (valid.length === 0) return 0;
+    return valid.reduce((sum, d) => sum + d.duration, 0) / valid.length;
+  }, [pageDurations]);
+
+  const rhythmIssues = useMemo(() => {
+    const issues: string[] = [];
+    if (climaxIndices.length > 3) {
+      issues.push(`爆点太密集（${climaxIndices.length} 个），可能导致读者疲劳`);
+    }
+    if (climaxIndices.length === 0) {
+      issues.push("还没有设置爆点页，读者可能感受不到悬念落点");
+    }
+    if (climaxIndices.length > 0 && climaxIndices[0] > total * 0.6) {
+      issues.push("第一个爆点出现太晚（超过 60% 位置），前半段节奏可能偏松");
+    }
+    const slowPages = pageDurations.filter((d) => d.duration > avgDuration * 1.8 && d.duration > 0);
+    if (slowPages.length > 2) {
+      issues.push(`有 ${slowPages.length} 页停留时间显著偏长，可能信息量过大或节奏拖沓`);
+    }
+    const fastPages = pageDurations.filter(
+      (d) => d.duration > 0 && d.duration < avgDuration * 0.4 && d.duration > 0.3,
+    );
+    if (fastPages.length > 3) {
+      issues.push(`有 ${fastPages.length} 页翻得特别快，可能内容不够抓眼`);
+    }
+    const setupPages = pages.filter((p) => p.tag === "setup").length;
+    if (setupPages > total * 0.5) {
+      issues.push(`铺垫页偏多（${setupPages}/${total}），前半段可能太平`);
+    }
+    return issues;
+  }, [climaxIndices, total, pageDurations, avgDuration, pages]);
+
+  const maxDuration = Math.max(...pageDurations.map((d) => d.duration), 1);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 20 }}
+      transition={{ duration: 0.3 }}
+      className="w-full max-w-2xl"
+    >
+      <div className="paper-card grain-overlay overflow-hidden">
+        <div className="p-4 border-b border-paper-200 bg-gradient-to-r from-accent-greenSoft/40 to-accent-orangeSoft/30">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-green to-accent-orange flex items-center justify-center text-white">
+                <BarChart3 size={15} />
+              </div>
+              <div>
+                <h3 className="font-serif font-semibold text-ink-900 text-sm leading-tight">
+                  阅读复盘
+                </h3>
+                <p className="text-[11px] text-ink-500 mt-0.5 leading-tight">
+                  共 {total} 页 · 平均停留 {avgDuration.toFixed(1)}s · {climaxIndices.length} 个爆点
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onReset}
+                className="btn-ghost !py-1 !px-2 !text-[11px] border border-paper-200"
+              >
+                <RotateCcw size={11} /> 重新阅读
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="btn-ghost !p-1.5"
+                title="关闭"
+              >
+                <ChevronRight size={16} className="-rotate-90" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 space-y-4 max-h-[60vh] overflow-y-auto">
+          {/* 节奏问题 */}
+          {rhythmIssues.length > 0 && (
+            <div className="rounded-xl bg-accent-orangeSoft/30 border border-accent-orange/20 p-3">
+              <div className="text-xs font-medium text-ink-800 mb-2 flex items-center gap-1.5">
+                <AlertTriangle size={13} className="text-accent-orange" />
+                节奏分析提示
+              </div>
+              <ul className="space-y-1.5">
+                {rhythmIssues.map((issue, i) => (
+                  <li key={i} className="text-[11px] text-ink-600 leading-relaxed flex gap-1.5">
+                    <span className="text-accent-orange shrink-0">·</span>
+                    <span>{issue}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 标签分布 */}
+          <div>
+            <div className="text-xs font-medium text-ink-700 mb-2.5 flex items-center gap-1.5">
+              <TrendingUp size={12} className="text-accent-green" />
+              标签分布
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(tagStats).map(([tag, count]) => {
+                const meta = TAG_META[tag as keyof typeof TAG_META];
+                const pct = (count / total) * 100;
+                return (
+                  <div
+                    key={tag}
+                    className="flex-1 min-w-[80px] rounded-xl border border-paper-200 bg-paper-50 p-2.5"
+                  >
+                    <div className="flex items-center gap-1 mb-1">
+                      <span className={cn("w-3 h-3 rounded-full", meta.color)} />
+                      <span className="text-[10px] text-ink-500">{meta.label}</span>
+                    </div>
+                    <div className="font-serif font-bold text-lg text-ink-800 tabular-nums">
+                      {count}
+                      <span className="text-[10px] text-ink-400 font-normal ml-1">
+                        {pct.toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              {Object.keys(tagStats).length === 0 && (
+                <div className="text-[11px] text-ink-400 w-full text-center py-3">
+                  还没有给页面打标签，先回上传页给关键页做标记吧
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 爆点位置 */}
+          <div>
+            <div className="text-xs font-medium text-ink-700 mb-2.5 flex items-center gap-1.5">
+              <Bomb size={12} className="text-tag-climax" />
+              爆点位置
+            </div>
+            <div className="relative h-8 rounded-full bg-paper-200 overflow-hidden">
+              {pages.map((p, i) => {
+                const pct = total > 1 ? (i / (total - 1)) * 100 : 50;
+                const isClimax = p.tag === "climax";
+                if (!isClimax) return null;
+                return (
+                  <button
+                    key={p.id + "_r"}
+                    type="button"
+                    onClick={() => onJump(i)}
+                    className="absolute -translate-x-1/2 top-1 group"
+                    style={{ left: `${pct}%` }}
+                  >
+                    <span className="block w-6 h-6 rounded-full bg-tag-climax text-white flex items-center justify-center text-[10px] font-bold shadow-lg animate-pulse-soft ring-2 ring-white/60">
+                      {i + 1}
+                    </span>
+                    <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] text-ink-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                      第 {i + 1} 页
+                    </span>
+                  </button>
+                );
+              })}
+              <div className="absolute bottom-0 inset-x-0 h-1 bg-gradient-to-r from-tag-setup/30 via-tag-climax/50 to-tag-transition/30" />
+            </div>
+            {climaxIndices.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-5">
+                {climaxIndices.map((idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => onJump(idx)}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-tag-climax/15 text-tag-climax text-[10px] font-medium border border-tag-climax/20 hover:bg-tag-climax hover:text-white transition-colors"
+                  >
+                    💥 第 {idx + 1} 页 · {(idx / total) * 100 | 0}% 位置
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 每页停留时长 */}
+          <div>
+            <div className="text-xs font-medium text-ink-700 mb-2.5 flex items-center gap-1.5">
+              <Clock size={12} className="text-accent-orange" />
+              每页停留时长
+            </div>
+            <div className="space-y-1.5">
+              {pageDurations.map(({ idx, duration }) => {
+                const page = pages[idx];
+                const pct = maxDuration > 0 ? Math.min(100, (duration / maxDuration) * 100) : 0;
+                const isSlow = duration > avgDuration * 1.5 && duration > 0;
+                const isFast = duration > 0 && duration < avgDuration * 0.6;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => onJump(idx)}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-paper-100 transition-colors group text-left"
+                  >
+                    <span className="text-[10px] font-mono text-ink-400 w-8 tabular-nums">
+                      {String(idx + 1).padStart(2, "0")}
+                    </span>
+                    <div className="flex-1 h-5 rounded-md bg-paper-200 overflow-hidden relative">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${pct}%` }}
+                        transition={{ delay: idx * 0.02, duration: 0.4 }}
+                        className={cn(
+                          "absolute inset-y-0 left-0 rounded-md",
+                          isSlow
+                            ? "bg-gradient-to-r from-accent-orange to-red-400"
+                            : isFast
+                              ? "bg-gradient-to-r from-accent-green to-emerald-400"
+                              : "bg-gradient-to-r from-ink-300 to-ink-400",
+                        )}
+                      />
+                    </div>
+                    <span
+                      className={cn(
+                        "text-[10px] font-mono w-12 text-right tabular-nums",
+                        duration === 0 ? "text-ink-300" : isSlow ? "text-accent-orange" : isFast ? "text-accent-green" : "text-ink-500",
+                      )}
+                    >
+                      {duration > 0 ? `${duration.toFixed(1)}s` : "-"}
+                    </span>
+                    {page?.tag && (
+                      <span
+                        className={cn(
+                          "w-3.5 h-3.5 rounded-full shrink-0",
+                          TAG_META[page.tag].color,
+                        )}
+                        title={TAG_META[page.tag].label}
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-center gap-4 mt-2 text-[10px] text-ink-400">
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-accent-orange" /> 偏慢
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-ink-400" /> 正常
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-accent-green" /> 偏快
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-paper-200" /> 未读
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </motion.div>
   );
 }

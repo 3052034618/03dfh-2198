@@ -5,6 +5,9 @@ import {
   AlertCircle,
   Info,
   ScanFace,
+  Crosshair,
+  FileText,
+  ArrowRightLeft,
 } from "lucide-react";
 import { useComicStore } from "@/store/comicStore";
 import { checkPages, cn } from "@/utils";
@@ -19,8 +22,16 @@ function SeverityIcon({ severity }: { severity: PageCheckIssue["severity"] }) {
   return <Info size={15} className="text-accent-green shrink-0" />;
 }
 
+function TypeIcon({ type }: { type: PageCheckIssue["type"] }) {
+  if (type === "gap") return <FileText size={13} />;
+  if (type === "order") return <ArrowRightLeft size={13} />;
+  if (type === "break") return <Crosshair size={13} />;
+  return null;
+}
+
 export default function PagesCheck() {
   const work = useComicStore((s) => s.currentWork);
+  const selectPage = useComicStore((s) => s.selectPage);
 
   const issues = useMemo(() => {
     if (!work) return [];
@@ -30,6 +41,23 @@ export default function PagesCheck() {
       work.pages.map((p) => ({ fileName: p.fileName, index: p.index })),
     );
   }, [work]);
+
+  const scrollToPage = (pageIdx: number) => {
+    if (!work) return;
+    const page = work.pages[pageIdx];
+    if (!page) return;
+    selectPage(page.id);
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-page-id="${page.id}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+        el.classList.add("ring-2", "ring-accent-orange", "ring-offset-2", "ring-offset-paper-50");
+        setTimeout(() => {
+          el.classList.remove("ring-2", "ring-accent-orange", "ring-offset-2", "ring-offset-paper-50");
+        }, 2500);
+      }
+    });
+  };
 
   if (!work) {
     return (
@@ -110,7 +138,7 @@ export default function PagesCheck() {
               <div className="flex-1 min-w-0">
                 <div
                   className={cn(
-                    "text-sm font-medium leading-snug",
+                    "text-sm font-medium leading-snug flex items-center gap-1.5",
                     issue.severity === "error"
                       ? "text-red-700"
                       : issue.severity === "warn"
@@ -118,6 +146,7 @@ export default function PagesCheck() {
                         : "text-accent-green",
                   )}
                 >
+                  <TypeIcon type={issue.type} />
                   {issue.message}
                 </div>
                 {issue.detail && (
@@ -125,12 +154,29 @@ export default function PagesCheck() {
                     {issue.detail}
                   </div>
                 )}
+
+                {issue.relatedPageIndices && issue.relatedPageIndices.length > 0 && (
+                  <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] text-ink-400">相关页：</span>
+                    {issue.relatedPageIndices.map((pi) => (
+                      <button
+                        key={pi}
+                        type="button"
+                        onClick={() => scrollToPage(pi)}
+                        className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md bg-white border border-paper-300 text-[10px] font-medium text-ink-600 hover:border-accent-orange hover:text-accent-orange transition-colors shadow-sm"
+                      >
+                        <Crosshair size={9} />
+                        第 {pi + 1} 页
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </motion.div>
           ))}
         </AnimatePresence>
 
-        {/* 快速统计 */}
+        {/* 标签分布快速统计 */}
         {work.pages.length > 0 && (
           <div className="pt-2 mt-2 border-t border-paper-200 grid grid-cols-4 gap-2">
             {(["setup", "climax", "transition", "fight"] as const).map((t) => {

@@ -22,6 +22,7 @@ import {
   saveShortShare,
   saveWorkToStorage,
   type ShareMode,
+  type FeedbackEntry,
   uid,
 } from "@/utils";
 
@@ -39,6 +40,7 @@ interface ComicState {
   readMode: ReadMode;
   pauseDuration: number;
   isUploading: boolean;
+  readingLog: { pageIdx: number; enterTime: number; leaveTime: number }[];
 
   // 工作区
   createWork: (data?: {
@@ -64,12 +66,17 @@ interface ComicState {
   setReadMode: (mode: ReadMode) => void;
   setPauseDuration: (sec: number) => void;
 
+  // 阅读日志（用于复盘）
+  logPageEnter: (pageIdx: number) => void;
+  logPageLeave: (pageIdx: number) => void;
+  resetReadingLog: () => void;
+
   // 分享
   generateShareLink: (mode?: ShareMode) => ShareResult;
-  exportStandaloneFile: (feedback?: string[]) => void;
+  exportStandaloneFile: (feedback?: FeedbackEntry[] | string[]) => void;
   loadFromShare: (encoded: string) => SharePackage | null;
   loadFromShortShare: (id: string) => SharePackage | null;
-  exportFeedbackSummary: (feedback: string[]) => string;
+  exportFeedbackSummary: (feedback: FeedbackEntry[] | string[]) => string;
 
   // 持久化
   hydrateFromStorage: () => void;
@@ -101,6 +108,7 @@ export const useComicStore = create<ComicState>((set, get) => ({
   readMode: "flip",
   pauseDuration: 3,
   isUploading: false,
+  readingLog: [],
 
   createWork: (data = {}) => {
     const work = {
@@ -252,6 +260,32 @@ export const useComicStore = create<ComicState>((set, get) => ({
   setPauseDuration: (sec) =>
     set({ pauseDuration: Math.min(15, Math.max(1, sec)) }),
 
+  logPageEnter: (pageIdx) => {
+    set((s) => {
+      const now = Date.now();
+      const existing = s.readingLog.find((l) => l.pageIdx === pageIdx);
+      if (existing) {
+        existing.enterTime = now;
+        return { readingLog: [...s.readingLog] };
+      }
+      return {
+        readingLog: [...s.readingLog, { pageIdx, enterTime: now, leaveTime: 0 }],
+      };
+    });
+  },
+
+  logPageLeave: (pageIdx) => {
+    set((s) => {
+      const now = Date.now();
+      const log = s.readingLog.map((l) =>
+        l.pageIdx === pageIdx && l.leaveTime === 0 ? { ...l, leaveTime: now } : l,
+      );
+      return { readingLog: log };
+    });
+  },
+
+  resetReadingLog: () => set({ readingLog: [] }),
+
   generateShareLink: (mode) => {
     const { currentWork } = get();
     if (!currentWork || currentWork.pages.length === 0) {
@@ -337,7 +371,10 @@ export const useComicStore = create<ComicState>((set, get) => ({
     const { currentWork } = get();
     if (!currentWork) return;
     const pkg = buildSharePackage(currentWork);
-    exportStandaloneHtml(pkg, currentWork.title || "分镜审稿包", feedback);
+    const feedbackTexts = Array.isArray(feedback)
+      ? feedback.map((f) => (typeof f === "string" ? f : f?.text || ""))
+      : undefined;
+    exportStandaloneHtml(pkg, currentWork.title || "分镜审稿包", feedbackTexts);
   },
 
   loadFromShare: (encoded) => parseShareLink(encoded),
@@ -346,7 +383,11 @@ export const useComicStore = create<ComicState>((set, get) => ({
     const { currentWork } = get();
     if (!currentWork) return "";
     const pkg = buildSharePackage(currentWork);
-    return exportFeedbackText(pkg, feedback, currentWork.title || "分镜审稿反馈");
+    if (Array.isArray(feedback) && feedback.length > 0 && typeof feedback[0] === "object") {
+      return exportFeedbackText(pkg, feedback as FeedbackEntry[], currentWork.title || "分镜审稿反馈");
+    }
+    const entries = (feedback as string[] || []).map((text) => ({ text, status: null }));
+    return exportFeedbackText(pkg, entries, currentWork.title || "分镜审稿反馈");
   },
 
   hydrateFromStorage: () => {
