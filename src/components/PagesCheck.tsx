@@ -182,7 +182,7 @@ export default function PagesCheck() {
                   {issue.message}
                 </div>
                 {issue.detail && (
-                  <div className="text-[11px] text-ink-500 mt-1 leading-relaxed">
+                  <div className="text-[11px] text-ink-500 mt-1 leading-relaxed whitespace-pre-line">
                     {issue.detail}
                   </div>
                 )}

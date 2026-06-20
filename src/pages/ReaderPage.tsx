@@ -19,6 +19,7 @@ import {
   Bomb,
   AlertTriangle,
   Save,
+  GitCompare,
 } from "lucide-react";
 import { useComicStore } from "@/store/comicStore";
 import { TAG_META, PLATFORM_META, READ_DIRECTION_META, type ComicPage, type ReadMode } from "@/types";
@@ -1130,6 +1131,190 @@ function ReviewPanel({
               </div>
             </div>
           )}
+
+          {/* 与上次阅读的差异对比 */}
+          {snapshots.length > 0 && (() => {
+            const lastSnap = snapshots[snapshots.length - 1];
+            const getDur = (log: { pageIdx: number; enterTime: number; leaveTime: number }[]) => {
+              const map: Record<number, number> = {};
+              log.forEach((l) => {
+                if (l.enterTime && l.leaveTime) map[l.pageIdx] = (l.leaveTime - l.enterTime) / 1000;
+              });
+              return map;
+            };
+            const curDur = getDur(readingLog);
+            const lastDur = getDur(lastSnap.log);
+            const allIdx = Array.from(
+              new Set([...Object.keys(curDur), ...Object.keys(lastDur)]),
+            ).map(Number);
+
+            const pageDiffs: Array<{ idx: number; cur: number; last: number; diff: number }> = [];
+            allIdx.forEach((i) => {
+              const c = curDur[i] || 0;
+              const l = lastDur[i] || 0;
+              if (c > 0 || l > 0) pageDiffs.push({ idx: i, cur: c, last: l, diff: c - l });
+            });
+
+            const slowerPages = pageDiffs
+              .filter((d) => d.cur > 0 && d.last > 0 && d.diff >= 1.5)
+              .sort((a, b) => b.diff - a.diff);
+            const fasterPages = pageDiffs
+              .filter((d) => d.cur > 0 && d.last > 0 && d.diff <= -1.5)
+              .sort((a, b) => a.diff - b.diff);
+
+            const curClimaxDur = readingLog
+              .filter((l) => {
+                const p = pages[l.pageIdx];
+                return p?.tag === "climax";
+              })
+              .map((l) => (l.enterTime && l.leaveTime ? (l.leaveTime - l.enterTime) / 1000 : 0))
+              .filter((t) => t > 0);
+            const lastClimaxDur = lastSnap.log
+              .filter((l) => {
+                const p = pages[l.pageIdx];
+                return p?.tag === "climax";
+              })
+              .map((l) => (l.enterTime && l.leaveTime ? (l.leaveTime - l.enterTime) / 1000 : 0))
+              .filter((t) => t > 0);
+            const curClimaxAvg =
+              curClimaxDur.length > 0
+                ? curClimaxDur.reduce((a, b) => a + b, 0) / curClimaxDur.length
+                : 0;
+            const lastClimaxAvg =
+              lastClimaxDur.length > 0
+                ? lastClimaxDur.reduce((a, b) => a + b, 0) / lastClimaxDur.length
+                : 0;
+
+            const curValid = Object.values(curDur).filter((t) => t > 0);
+            const lastValid = Object.values(lastDur).filter((t) => t > 0);
+            const curAvg = curValid.length ? curValid.reduce((a, b) => a + b, 0) / curValid.length : 0;
+            const lastAvg = lastValid.length ? lastValid.reduce((a, b) => a + b, 0) / lastValid.length : 0;
+            const avgDiff = curAvg - lastAvg;
+
+            if (pageDiffs.length === 0) return null;
+
+            return (
+              <div>
+                <div className="text-xs font-medium text-ink-700 mb-2.5 flex items-center gap-1.5">
+                  <GitCompare size={12} className="text-tag-transition" />
+                  与「{lastSnap.name}」对比
+                </div>
+                <div className="rounded-xl border border-paper-200 bg-paper-50 p-3 space-y-3">
+                  {/* 总体指标 */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-lg bg-white border border-paper-200 p-2">
+                      <div className="text-[9px] text-ink-400 mb-0.5">平均停留</div>
+                      <div className="flex items-baseline gap-1">
+                        <span className="font-serif font-bold text-ink-700 text-sm">
+                          {curAvg.toFixed(1)}s
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[10px] font-mono",
+                            avgDiff >= 1
+                              ? "text-accent-orange"
+                              : avgDiff <= -1
+                                ? "text-accent-green"
+                                : "text-ink-400",
+                          )}
+                        >
+                          {avgDiff >= 0 ? "↑" : "↓"} {Math.abs(avgDiff).toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="text-[9px] text-ink-400 mt-0.5">上次 {lastAvg.toFixed(1)}s</div>
+                    </div>
+                    <div className="rounded-lg bg-white border border-paper-200 p-2">
+                      <div className="text-[9px] text-ink-400 mb-0.5">爆点页平均</div>
+                      <div className="flex items-baseline gap-1">
+                        <span className="font-serif font-bold text-tag-climax text-sm">
+                          {curClimaxAvg.toFixed(1)}s
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[10px] font-mono",
+                            curClimaxAvg > lastClimaxAvg ? "text-accent-orange" : "text-accent-green",
+                          )}
+                        >
+                          {curClimaxAvg >= lastClimaxAvg ? "↑" : "↓"}{" "}
+                          {Math.abs(curClimaxAvg - lastClimaxAvg).toFixed(1)}s
+                        </span>
+                      </div>
+                      <div className="text-[9px] text-ink-400 mt-0.5">
+                        上次 {lastClimaxAvg.toFixed(1)}s
+                        {curClimaxAvg > lastClimaxAvg && lastClimaxAvg > 0
+                          ? " · 读者停更久了"
+                          : ""}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 变慢的页 */}
+                  {slowerPages.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-medium text-accent-orange mb-1.5">
+                        ⏳ 阅读变慢的页（≥1.5s）
+                      </div>
+                      <div className="space-y-1">
+                        {slowerPages.slice(0, 5).map((d) => (
+                          <button
+                            key={d.idx}
+                            type="button"
+                            onClick={() => onJump(d.idx)}
+                            className="w-full flex items-center gap-2 px-2 py-1 rounded-md bg-accent-orangeSoft/40 hover:bg-accent-orangeSoft text-left transition-colors"
+                          >
+                            <span className="font-mono text-[10px] text-ink-500 w-10">
+                              第 {d.idx + 1} 页
+                            </span>
+                            <span className="font-mono text-[10px] text-accent-orange">
+                              {d.last.toFixed(1)}s → {d.cur.toFixed(1)}s
+                            </span>
+                            <span className="text-[10px] font-bold text-accent-orange ml-auto">
+                              +{d.diff.toFixed(1)}s
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 变快的页 */}
+                  {fasterPages.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-medium text-accent-green mb-1.5">
+                        ⚡ 阅读变快的页（≥1.5s）
+                      </div>
+                      <div className="space-y-1">
+                        {fasterPages.slice(0, 5).map((d) => (
+                          <button
+                            key={d.idx}
+                            type="button"
+                            onClick={() => onJump(d.idx)}
+                            className="w-full flex items-center gap-2 px-2 py-1 rounded-md bg-accent-greenSoft/40 hover:bg-accent-greenSoft text-left transition-colors"
+                          >
+                            <span className="font-mono text-[10px] text-ink-500 w-10">
+                              第 {d.idx + 1} 页
+                            </span>
+                            <span className="font-mono text-[10px] text-accent-green">
+                              {d.last.toFixed(1)}s → {d.cur.toFixed(1)}s
+                            </span>
+                            <span className="text-[10px] font-bold text-accent-green ml-auto">
+                              {d.diff.toFixed(1)}s
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {slowerPages.length === 0 && fasterPages.length === 0 && (
+                    <div className="text-[11px] text-ink-400 text-center py-2">
+                      两次阅读节奏基本一致
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </motion.div>

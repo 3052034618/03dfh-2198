@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Share2,
@@ -19,6 +19,7 @@ import {
   AlertCircle,
   HardDrive,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { useComicStore } from "@/store/comicStore";
 import {
@@ -35,8 +36,11 @@ import {
   saveFeedbackDraft,
   loadFeedbackDraft,
   clearFeedbackDraft,
+  parseFeedbackText,
+  mergeFeedback,
   type FeedbackEntry,
   cn,
+  uid,
 } from "@/utils";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -133,6 +137,61 @@ export default function SharePage({ mode }: Props) {
 
   const [isAuthorMode, setIsAuthorMode] = useState(false);
   const [showTodoPanel, setShowTodoPanel] = useState(false);
+  const [importedFeedbacks, setImportedFeedbacks] = useState<
+    Array<{ id: string; sourceName: string; importedAt: number; entries: FeedbackEntry[] }>
+  >([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+
+  const handleImportFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0 || !pkg) return;
+    const newImports: typeof importedFeedbacks = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        let text = "";
+        if (file.name.endsWith(".html") || file.name.endsWith(".htm")) {
+          const htmlText = await file.text();
+          const match = htmlText.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+          text = match ? match[1] : htmlText;
+        } else {
+          text = await file.text();
+        }
+        const entries = (parseFeedbackText as any)(text, file.name, pkg.pg.length);
+        const hasAny = entries.some(
+          (e: FeedbackEntry) => e?.text?.trim() || e?.status,
+        );
+        if (hasAny) {
+          newImports.push({
+            id: uid("imp_"),
+            sourceName: file.name.replace(/\.(txt|html?)$/i, ""),
+            importedAt: Date.now(),
+            entries: entries.slice(0, pkg.pg.length),
+          });
+        }
+      } catch {
+        /* ignore parse errors */
+      }
+    }
+    if (newImports.length > 0) {
+      setImportedFeedbacks((prev) => [...prev, ...newImports]);
+    }
+    setFileInputKey((k) => k + 1);
+  };
+
+  const removeImported = (id: string) => {
+    setImportedFeedbacks((prev) => prev.filter((x) => x.id !== id));
+  };
+
+  const mergedFeedback = useMemo(() => {
+    if (!pkg) return [];
+    return (mergeFeedback as any)(feedback, importedFeedbacks, pkg.pg.length) as Array<{
+      pageIdx: number;
+      statuses: Record<string, string[]>;
+      texts: Array<{ source: string; text: string }>;
+      resolved: boolean;
+    }>;
+  }, [feedback, importedFeedbacks, pkg]);
 
   const resolvedCount = useMemo(
     () => feedback.filter((f) => (f?.text?.trim() || f?.status) && f.resolved).length,
@@ -550,6 +609,69 @@ export default function SharePage({ mode }: Props) {
                     )}
                   </AnimatePresence>
 
+                  {/* 作者模式：合并后的多人反馈展示 */}
+                  <AnimatePresence>
+                    {isAuthorMode && importedFeedbacks.length > 0 && (() => {
+                      const merged = mergedFeedback[activeIdx];
+                      if (!merged) return null;
+                      const hasOthers = merged.texts.some((t) => t.source !== "当前") || Object.values(merged.statuses).some((arr) => arr.some((s) => s !== "当前"));
+                      if (!hasOthers) return null;
+                      return (
+                        <motion.div
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="mb-3 rounded-xl border border-paper-200 bg-paper-50 p-3"
+                        >
+                          <div className="text-[11px] font-semibold text-ink-700 mb-2 flex items-center gap-1.5">
+                            <BookMarked size={11} /> 朋友反馈汇总
+                          </div>
+                          {/* 各状态投票 */}
+                          {Object.keys(merged.statuses).length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                              {(Object.keys(merged.statuses) as Array<keyof typeof merged.statuses>).map((st) => {
+                                const voters = merged.statuses[st].filter((s) => s !== "当前");
+                                if (voters.length === 0) return null;
+                                const meta = FEEDBACK_STATUS_META[st as FeedbackStatus] || { label: st, icon: "⚪" };
+                                return (
+                                  <span
+                                    key={st}
+                                    className={cn(
+                                      "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] border",
+                                      st === "review"
+                                        ? "bg-red-50 text-red-600 border-red-200"
+                                        : st === "revise"
+                                          ? "bg-amber-50 text-amber-700 border-amber-200"
+                                          : "bg-emerald-50 text-emerald-700 border-emerald-200",
+                                    )}
+                                  >
+                                    {meta.icon} {meta.label}（{voters.length}人：{voters.join("、")}）
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {/* 各朋友的文字反馈 */}
+                          {merged.texts.filter((t) => t.source !== "当前").length > 0 && (
+                            <div className="space-y-1.5">
+                              {merged.texts
+                                .filter((t) => t.source !== "当前")
+                                .map((t, i) => (
+                                  <div key={i} className="rounded-lg bg-white border border-paper-200 p-2">
+                                    <div className="text-[9px] text-ink-400 mb-0.5 font-medium">
+                                      {t.source}
+                                    </div>
+                                    <div className="text-[11px] text-ink-600 whitespace-pre-wrap leading-relaxed">
+                                      {t.text}
+                                    </div>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </motion.div>
+                      );
+                    })()}
+                  </AnimatePresence>
+
                   <textarea
                     value={currentEntry.text || ""}
                     onChange={(e) => setFbText(activeIdx, e.target.value)}
@@ -646,6 +768,71 @@ export default function SharePage({ mode }: Props) {
                       </button>
                     )}
                   </div>
+
+                  {/* 导入反馈 */}
+                  <div className="mt-3 pt-3 border-t border-paper-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[11px] font-medium text-ink-700 flex items-center gap-1">
+                        <Upload size={11} /> 合并朋友反馈
+                      </div>
+                      {importedFeedbacks.length > 0 && (
+                        <span className="text-[10px] text-accent-green">
+                          已导入 {importedFeedbacks.length} 份
+                        </span>
+                      )}
+                    </div>
+                    <label
+                      className={cn(
+                        "block w-full cursor-pointer rounded-lg border-2 border-dashed px-3 py-2 text-center transition-colors",
+                        "border-paper-300 hover:border-accent-green/50 hover:bg-accent-greenSoft/30",
+                      )}
+                    >
+                      <span className="text-[11px] text-ink-500">
+                        📎 选择 TXT / HTML 反馈文件
+                      </span>
+                      <input
+                        key={fileInputKey}
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        accept=".txt,.html,.htm"
+                        className="hidden"
+                        onChange={(e) => handleImportFiles(e.target.files)}
+                      />
+                    </label>
+                    {importedFeedbacks.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {importedFeedbacks.map((imp) => {
+                          const impCount = imp.entries.filter(
+                            (e) => e?.text?.trim() || e?.status,
+                          ).length;
+                          return (
+                            <div
+                              key={imp.id}
+                              className="flex items-center justify-between rounded-md bg-paper-100 px-2 py-1.5"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="text-[10px] font-medium text-ink-700 truncate">
+                                  {imp.sourceName}
+                                </div>
+                                <div className="text-[9px] text-ink-400">
+                                  {impCount} 页有反馈
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => removeImported(imp.id)}
+                                className="text-ink-300 hover:text-red-500 transition-colors ml-1 shrink-0"
+                                title="移除"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : null}
 
@@ -738,7 +925,11 @@ export default function SharePage({ mode }: Props) {
                         )}
                       </div>
                       <div className="space-y-1">
-                        {items.map(({ entry, idx }) => (
+                        {items.map(({ entry, idx }) => {
+                          const merged = mergedFeedback[idx];
+                          const totalMentions = merged ? merged.texts.length + Object.values(merged.statuses).flat().length : 0;
+                          const multiSources = merged && Object.values(merged.statuses).some((arr) => arr.length > 1);
+                          return (
                           <button
                             key={idx}
                             type="button"
@@ -775,15 +966,25 @@ export default function SharePage({ mode }: Props) {
                                     ? entry.text.trim().split("\n")[0].slice(0, 20)
                                     : "（仅状态标记）"}
                                 </span>
+                                {multiSources && totalMentions > 1 && (
+                                  <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-accent-orange/10 text-accent-orange text-[9px] font-bold border border-accent-orange/20">
+                                    👥 {totalMentions}人提过
+                                  </span>
+                                )}
                               </div>
                               {entry.text?.trim() && entry.text.length > 20 && (
                                 <div className="text-[10px] text-ink-400 truncate">
                                   {entry.text.trim().slice(20, 45)}…
                                 </div>
                               )}
+                              {merged && merged.texts.length > 1 && (
+                                <div className="text-[9px] text-ink-400 mt-0.5 truncate">
+                                  来源：{merged.texts.map((t) => t.source).join("、")}
+                                </div>
+                              )}
                             </div>
                           </button>
-                        ))}
+                        );})}
                       </div>
                     </div>
                   );

@@ -498,6 +498,60 @@ export function exportFeedbackText(
         lines.push(`第 ${String(i + 1).padStart(2, " ")} 页${tagStr}${statusStr}：${entry.text.trim().split("\n")[0].slice(0, 40)}${entry.text.trim().length > 40 ? "…" : ""}`);
       }
     });
+    lines.push("");
+  }
+
+  /* 处理进度待办：未处理的排最前 */
+  const todoItems: Array<{ idx: number; status: string; resolved: boolean; text: string }> = [];
+  entries.forEach((e, i) => {
+    if (e.status || e.text?.trim()) {
+      todoItems.push({
+        idx: i,
+        status: e.status || "unmarked",
+        resolved: !!e.resolved,
+        text: e.text?.trim() || "",
+      });
+    }
+  });
+
+  if (todoItems.length > 0) {
+    const priorityOrder: Record<string, number> = { review: 0, revise: 1, unmarked: 2, pass: 3 };
+    todoItems.sort((a, b) => {
+      if (a.resolved !== b.resolved) return a.resolved ? 1 : -1;
+      return (priorityOrder[a.status] ?? 9) - (priorityOrder[b.status] ?? 9);
+    });
+
+    lines.push("=".repeat(48));
+    lines.push(`✅ 作者回收待办（${todoItems.filter((t) => !t.resolved).length} 待处理 / ${todoItems.length} 总计）`);
+    lines.push("=".repeat(48));
+    lines.push("");
+
+    const unresolved = todoItems.filter((t) => !t.resolved);
+    const resolved = todoItems.filter((t) => t.resolved);
+
+    if (unresolved.length > 0) {
+      lines.push(`── ⏳ 待处理（${unresolved.length} 项，投稿前请确认）──`);
+      unresolved.forEach((t) => {
+        const meta = t.status === "unmarked"
+          ? { label: "未标注", icon: "⚪" }
+          : FEEDBACK_STATUS_META[t.status as keyof typeof FEEDBACK_STATUS_META];
+        const preview = t.text ? ` · ${t.text.split("\n")[0].slice(0, 30)}${t.text.length > 30 ? "…" : ""}` : "";
+        lines.push(`  [ ] 第 ${t.idx + 1} 页 ${meta.icon}${meta.label}${preview}`);
+      });
+      lines.push("");
+    }
+
+    if (resolved.length > 0) {
+      lines.push(`── ✅ 已处理（${resolved.length} 项）──`);
+      resolved.forEach((t) => {
+        const meta = t.status === "unmarked"
+          ? { label: "未标注", icon: "⚪" }
+          : FEEDBACK_STATUS_META[t.status as keyof typeof FEEDBACK_STATUS_META];
+        const preview = t.text ? ` · ${t.text.split("\n")[0].slice(0, 30)}${t.text.length > 30 ? "…" : ""}` : "";
+        lines.push(`  [x] 第 ${t.idx + 1} 页 ${meta.icon}${meta.label}${preview}`);
+      });
+      lines.push("");
+    }
   }
 
   const text = lines.join("\n");
@@ -642,22 +696,141 @@ export function checkPages(
       const related = Array.from(relatedSet).slice(0, 6).sort((a, b) => a - b);
 
       const examples = outOfOrderPairs
-        .slice(0, 2)
+        .slice(0, 3)
         .map(
           (p) =>
-            `第${p.currIdx + 1}位（编号${p.currNum}）排在第${p.prevIdx + 1}位（编号${p.prevNum}）前面`,
+            `📄 当前第${p.currIdx + 1}位的文件编号是${p.currNum}，却排在第${p.prevIdx + 1}位（编号${p.prevNum}）的前面`,
         )
-        .join("；");
+        .join("\n");
 
       issues.push({
         type: "order",
         severity: "warn",
         message: `页序错位：发现 ${outOfOrderPairs.length} 处排列顺序与文件名编号不符`,
-        detail: `例如 ${examples}。建议对照文件名编号重新拖放调整，确保阅读顺序正确。`,
+        detail: `按文件名编号升序应该是从小到大排列，检测到逆序：\n${examples}\n点击右侧「全部定位」可以把相关缩略图带到视野附近，直接拖回去。`,
         relatedPageIndices: related,
       });
     }
   }
 
   return issues;
+}
+
+/* ---------------- 多份反馈导入与合并 ---------------- */
+export interface ImportedFeedback {
+  sourceName: string;
+  importedAt: number;
+  entries: FeedbackEntry[];
+}
+
+export interface MergedPageFeedback {
+  pageIdx: number;
+  statuses: Partial<Record<FeedbackStatus | "pass", string[]>>;
+  texts: Array<{ source: string; text: string }>;
+  resolved: boolean;
+}
+
+export function parseFeedbackText(
+  text: string,
+  sourceName = "未命名反馈",
+  totalPages?: number,
+): FeedbackEntry[] {
+  const lines = text.split(/\r?\n/);
+  const entries: Record<number, FeedbackEntry> = {};
+
+  let currentPage: number | null = null;
+  let captureText = false;
+
+  lines.forEach((line) => {
+    const pageMatch = line.match(/第\s*(\d+)\s*页/);
+    if (pageMatch) {
+      currentPage = parseInt(pageMatch[1], 10) - 1;
+      if (currentPage >= 0) {
+        if (!entries[currentPage]) {
+          entries[currentPage] = { text: "", status: null, resolved: false };
+        }
+        const resolvedMatch = line.match(/[✓✔✅]/);
+        if (resolvedMatch) {
+          entries[currentPage].resolved = true;
+        }
+        const statusMatch = line.match(/(重点重看|需要修改|通过)/);
+        if (statusMatch) {
+          const map: Record<string, FeedbackStatus | "pass"> = {
+            "重点重看": "review",
+            "需要修改": "revise",
+            通过: "pass",
+          };
+          const mapped = map[statusMatch[1]];
+          if (mapped && mapped !== "pass") {
+            entries[currentPage].status = mapped;
+          } else if (mapped === "pass") {
+            entries[currentPage].status = "pass";
+          }
+        }
+        if (line.includes("[x]") || line.includes("[X]")) {
+          entries[currentPage].resolved = true;
+        }
+        captureText = true;
+        return;
+      }
+    }
+
+    const feedbackMatch = line.match(/💬\s*(?:编辑)?反馈[：:]\s*(.+)/);
+    if (feedbackMatch && currentPage != null && entries[currentPage]) {
+      const existing = entries[currentPage].text;
+      entries[currentPage].text = existing
+        ? existing + "\n" + feedbackMatch[1].trim()
+        : feedbackMatch[1].trim();
+      return;
+    }
+
+    if (line.match(/^\s*──/) || line.match(/^={2,}/) || line.match(/^\s*📊/) || line.match(/^\s*📋/) || line.match(/^\s*📖/) || line.match(/^\s*✅/)) {
+      captureText = false;
+    }
+  });
+
+  const count = totalPages ?? Math.max(...Object.keys(entries).map(Number), 0) + 1;
+  const result: FeedbackEntry[] = [];
+  for (let i = 0; i < count; i++) {
+    result.push(entries[i] || { text: "", status: null, resolved: false });
+  }
+  return result;
+}
+
+export function mergeFeedback(
+  base: FeedbackEntry[],
+  imports: ImportedFeedback[],
+  totalPages: number,
+): MergedPageFeedback[] {
+  const result: MergedPageFeedback[] = [];
+  for (let i = 0; i < totalPages; i++) {
+    const merged: MergedPageFeedback = {
+      pageIdx: i,
+      statuses: {},
+      texts: [],
+      resolved: base[i]?.resolved ?? false,
+    };
+    const baseEntry = base[i];
+    if (baseEntry) {
+      if (baseEntry.status) {
+        merged.statuses[baseEntry.status] = ["当前"];
+      }
+      if (baseEntry.text?.trim()) {
+        merged.texts.push({ source: "当前", text: baseEntry.text.trim() });
+      }
+    }
+    imports.forEach((imp) => {
+      const entry = imp.entries[i];
+      if (!entry) return;
+      if (entry.status) {
+        if (!merged.statuses[entry.status]) merged.statuses[entry.status] = [];
+        merged.statuses[entry.status].push(imp.sourceName);
+      }
+      if (entry.text?.trim()) {
+        merged.texts.push({ source: imp.sourceName, text: entry.text.trim() });
+      }
+    });
+    result.push(merged);
+  }
+  return result;
 }

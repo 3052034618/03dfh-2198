@@ -37,8 +37,8 @@ function ModeSwitcher({
     sub: string;
     icon: typeof Globe;
   }> = [
-    { key: "long", label: "完整链接", sub: "数据直接编码，跨设备可用", icon: Globe },
-    { key: "short", label: "短链接", sub: `同浏览器可用，保留 ${TTL_DAYS} 天`, icon: Clock },
+    { key: "long", label: "完整链接", sub: "数据直接编码，跨设备可用（太长会打不开）", icon: Globe },
+    { key: "short", label: "短链接", sub: `同机临时预览，保留 ${TTL_DAYS} 天，不能转发`, icon: Clock },
   ];
   return (
     <div className="grid grid-cols-2 gap-2 mb-4">
@@ -235,7 +235,7 @@ function ShareModal({ onClose }: { onClose: () => void }) {
                 )}
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-medium text-ink-500 ml-1">
-                    {result.mode === "long" ? "完整分享链接" : "短分享链接"}
+                    {result.mode === "long" ? "完整分享链接" : "短分享链接（仅本机临时预览）"}
                   </label>
                   <span className={`text-[10px] font-mono ${charCountColor}`}>
                     {linkCharCount.toLocaleString()} 字符
@@ -255,11 +255,14 @@ function ShareModal({ onClose }: { onClose: () => void }) {
                     type="button"
                     onClick={copyLink}
                     disabled={!result.ok}
-                    className={
+                    className={cn(
+                      "!px-3",
                       copied
-                        ? "btn-primary !bg-accent-green !px-3"
-                        : "btn-primary !px-3"
-                    }
+                        ? "btn-primary !bg-accent-green"
+                        : isLongLinkTooLong
+                          ? "btn-secondary"
+                          : "btn-primary",
+                    )}
                   >
                     {loading ? (
                       <Loader2 size={16} className="animate-spin" />
@@ -269,7 +272,7 @@ function ShareModal({ onClose }: { onClose: () => void }) {
                       </>
                     ) : (
                       <>
-                        <Copy size={16} /> 复制
+                        <Copy size={16} /> {isLongLinkTooLong ? "复制试试" : "复制"}
                       </>
                     )}
                   </button>
@@ -335,13 +338,13 @@ function ShareModal({ onClose }: { onClose: () => void }) {
                 onClick={() => exportStandalone()}
                 disabled={!work}
                 className={cn(
-                  "!py-2 !px-3 text-xs",
                   isLongLinkTooLong || !result.ok
-                    ? "btn-primary !bg-accent-green hover:!bg-accent-greenHover"
-                    : "btn-secondary",
+                    ? "btn-primary !bg-accent-green hover:!bg-accent-greenHover !py-2.5 !px-5 text-sm shadow-md"
+                    : "btn-secondary !py-2 !px-3 text-xs",
                 )}
               >
-                <FileText size={14} /> 下载 HTML 分享包
+                <FileText size={isLongLinkTooLong || !result.ok ? 16 : 14} />{" "}
+                {(isLongLinkTooLong || !result.ok) ? "⭐ 下载 HTML 分享包" : "下载 HTML 分享包"}
               </button>
               <button
                 type="button"
