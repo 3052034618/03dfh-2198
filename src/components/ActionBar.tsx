@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Play,
@@ -10,16 +10,100 @@ import {
   Check,
   X,
   Loader2,
+  FileCode,
+  FileText,
+  ShieldCheck,
+  Clock,
+  Globe,
 } from "lucide-react";
-import { useComicStore } from "@/store/comicStore";
-import { buildSharePackage } from "@/utils";
+import { useComicStore, type ShareResult } from "@/store/comicStore";
+import { buildSharePackage, type ShareMode, SHORT_SHARE_TTL } from "@/utils";
 import { motion, AnimatePresence } from "framer-motion";
+
+const TTL_DAYS = Math.round(SHORT_SHARE_TTL / (1000 * 60 * 60 * 24));
+
+function ModeSwitcher({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: ShareMode;
+  onChange: (m: ShareMode) => void;
+  disabled?: boolean;
+}) {
+  const items: Array<{
+    key: ShareMode;
+    label: string;
+    sub: string;
+    icon: typeof Globe;
+  }> = [
+    { key: "long", label: "完整链接", sub: "数据直接编码，跨设备可用", icon: Globe },
+    { key: "short", label: "短链接", sub: `同浏览器可用，保留 ${TTL_DAYS} 天`, icon: Clock },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-2 mb-4">
+      {items.map((it) => {
+        const active = mode === it.key;
+        const Icon = it.icon;
+        return (
+          <button
+            key={it.key}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(it.key)}
+            className={
+              "text-left p-3 rounded-xl border-2 transition-all disabled:opacity-50 " +
+              (active
+                ? "border-accent-orange/60 bg-accent-orangeSoft/50 shadow-paper"
+                : "border-paper-300 bg-paper-50 hover:bg-paper-100")
+            }
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <Icon
+                size={14}
+                className={active ? "text-accent-orange" : "text-ink-400"}
+              />
+              <span
+                className={
+                  "text-sm font-semibold " +
+                  (active ? "text-ink-900" : "text-ink-600")
+                }
+              >
+                {it.label}
+              </span>
+            </div>
+            <div className="text-[11px] text-ink-400 leading-tight pl-6">
+              {it.sub}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function ShareModal({ onClose }: { onClose: () => void }) {
   const generate = useComicStore((s) => s.generateShareLink);
+  const exportStandalone = useComicStore((s) => s.exportStandaloneFile);
   const work = useComicStore((s) => s.currentWork);
+  const [mode, setMode] = useState<ShareMode>("long");
   const [copied, setCopied] = useState(false);
-  const [result, setResult] = useState(() => generate());
+  const [result, setResult] = useState<ShareResult>(() => generate());
+  const [loading, setLoading] = useState(false);
+
+  const regenerate = (nextMode?: ShareMode) => {
+    const target = nextMode ?? mode;
+    setLoading(true);
+    setTimeout(() => {
+      setResult(generate(target));
+      setLoading(false);
+    }, 0);
+  };
+
+  const switchMode = (m: ShareMode) => {
+    setMode(m);
+    regenerate(m);
+  };
 
   const copyLink = async () => {
     if (!result.ok) return;
@@ -48,6 +132,17 @@ function ShareModal({ onClose }: { onClose: () => void }) {
     URL.revokeObjectURL(url);
   };
 
+  const linkCharCount = result.link.length;
+  const charCountColor = useMemo(
+    () =>
+      linkCharCount > 6000
+        ? "text-accent-orange"
+        : linkCharCount > 3000
+          ? "text-ink-500"
+          : "text-ink-300",
+    [linkCharCount],
+  );
+
   return (
     <AnimatePresence>
       <motion.div
@@ -63,7 +158,7 @@ function ShareModal({ onClose }: { onClose: () => void }) {
           exit={{ opacity: 0, scale: 0.96, y: 12 }}
           transition={{ duration: 0.2 }}
           onClick={(e) => e.stopPropagation()}
-          className="paper-card w-full max-w-lg p-6 grain-overlay"
+          className="paper-card w-full max-w-xl p-6 grain-overlay"
         >
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-center gap-3">
@@ -75,7 +170,7 @@ function ShareModal({ onClose }: { onClose: () => void }) {
                   导出审稿包
                 </h3>
                 <p className="text-xs text-ink-400 mt-0.5">
-                  生成可分享链接，或者下载 JSON 文件
+                  选择最适合的分享方式，让编辑/朋友直接试看
                 </p>
               </div>
             </div>
@@ -88,81 +183,144 @@ function ShareModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
 
-          {!result.ok ? (
-            <div className="rounded-xl bg-accent-orangeSoft/60 border border-accent-orange/20 p-4 mb-4 flex items-start gap-3">
-              <AlertTriangle
-                size={18}
-                className="text-accent-orange shrink-0 mt-0.5"
-              />
-              <div>
-                <div className="text-sm font-medium text-accent-orange font-serif">
-                  {result.reason || "无法生成链接"}
+          <ModeSwitcher mode={mode} onChange={switchMode} />
+
+          <AnimatePresence mode="wait">
+            {!result.ok && result.reason ? (
+              <motion.div
+                key="error"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 4 }}
+                className="rounded-xl bg-accent-orangeSoft/60 border border-accent-orange/20 p-4 mb-4 flex items-start gap-3"
+              >
+                <AlertTriangle
+                  size={18}
+                  className="text-accent-orange shrink-0 mt-0.5"
+                />
+                <div className="flex-1">
+                  <div className="text-sm font-medium text-accent-orange font-serif">
+                    {result.reason}
+                  </div>
+                  <p className="text-xs text-ink-500 mt-1">
+                    建议改用短链接方式，或直接导出自包含 HTML 文件
+                  </p>
                 </div>
-                <p className="text-xs text-ink-500 mt-1">
-                  可以尝试下载 JSON 文件，通过微信/邮件等方式发送给对方
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3 mb-4">
-              <label className="text-xs font-medium text-ink-500 ml-1">
-                分享链接
-              </label>
-              <div className="flex gap-2">
-                <div className="flex-1 flex items-center gap-2 rounded-lg border border-paper-300 bg-paper-100 px-3 py-2 overflow-hidden">
-                  <LinkIcon size={14} className="text-ink-400 shrink-0" />
-                  <input
-                    type="text"
-                    readOnly
-                    value={result.link}
-                    className="flex-1 bg-transparent outline-none text-xs text-ink-600 truncate font-mono"
-                  />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="ok"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                className="space-y-2 mb-4"
+              >
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-ink-500 ml-1">
+                    {result.mode === "long" ? "完整分享链接" : "短分享链接"}
+                  </label>
+                  <span className={`text-[10px] font-mono ${charCountColor}`}>
+                    {linkCharCount.toLocaleString()} 字符
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={copyLink}
-                  className={
-                    copied
-                      ? "btn-primary !bg-accent-green !px-3"
-                      : "btn-primary !px-3"
-                  }
-                >
-                  {copied ? (
-                    <>
-                      <Check size={16} /> 已复制
-                    </>
+                <div className="flex gap-2">
+                  <div className="flex-1 flex items-center gap-2 rounded-lg border border-paper-300 bg-paper-100 px-3 py-2 overflow-hidden">
+                    <LinkIcon size={14} className="text-ink-400 shrink-0" />
+                    <input
+                      type="text"
+                      readOnly
+                      value={result.link}
+                      className="flex-1 bg-transparent outline-none text-xs text-ink-600 truncate font-mono"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={copyLink}
+                    disabled={!result.ok}
+                    className={
+                      copied
+                        ? "btn-primary !bg-accent-green !px-3"
+                        : "btn-primary !px-3"
+                    }
+                  >
+                    {loading ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : copied ? (
+                      <>
+                        <Check size={16} /> 已复制
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={16} /> 复制
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[11px] text-ink-400 leading-relaxed px-1 flex items-start gap-1.5">
+                  <ShieldCheck size={12} className="mt-0.5 shrink-0 text-ink-300" />
+                  {result.mode === "long" ? (
+                    <span>
+                      链接里直接包含图片和自评信息，任何设备打开即可预览，
+                      <span className="text-ink-500">不需要服务器</span>。
+                    </span>
                   ) : (
-                    <>
-                      <Copy size={16} /> 复制
-                    </>
+                    <span>
+                      数据保存在这台浏览器里，链接更短。
+                      <span className="text-ink-500">
+                        注意：换了浏览器/清理缓存会失效，重要内容请再导出一份 HTML。
+                      </span>
+                    </span>
                   )}
-                </button>
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="rounded-xl bg-paper-100/70 border border-paper-200 p-3 mb-4">
+            <div className="flex items-center gap-2 mb-2.5">
+              <FileCode size={14} className="text-accent-green" />
+              <div className="text-xs font-semibold text-ink-700 font-serif">
+                推荐再导出一份 HTML 文件（最稳）
               </div>
-              <p className="text-[11px] text-ink-400 leading-relaxed px-1">
-                链接里包含图片和自评信息，打开即可查看审稿内容。
-                <span className="text-ink-500">
-                  注意：由于图片直接编码在链接中，图片越多链接越长。
-                </span>
-              </p>
             </div>
-          )}
+            <p className="text-[11px] text-ink-500 leading-relaxed mb-3 pl-6">
+              HTML 文件里嵌入了全部图片 + 样式，对方双击就能在浏览器打开，
+              不用依赖这个网站。通过微信、邮件、网盘发送都没问题。
+            </p>
+            <div className="flex flex-wrap gap-2 pl-6">
+              <button
+                type="button"
+                onClick={() => exportStandalone()}
+                disabled={!work}
+                className="btn-secondary !py-2 !px-3 text-xs"
+              >
+                <FileText size={14} /> 导出 HTML 文件
+              </button>
+              <button
+                type="button"
+                onClick={downloadJson}
+                disabled={!work}
+                className="btn-ghost !py-2 !px-3 text-xs border border-paper-300"
+              >
+                <FileCode size={14} /> JSON 源文件
+              </button>
+            </div>
+          </div>
 
           <div className="flex items-center gap-3 pt-3 border-t border-paper-200">
+            <div className="text-[11px] text-ink-400 flex items-center gap-1.5">
+              <Clock size={12} />
+              {work ? `${work.pages.length} 页分镜` : "暂无分镜"}
+            </div>
+            <div className="flex-1" />
             <button
               type="button"
-              onClick={downloadJson}
-              className="btn-secondary flex-1"
-              disabled={!work}
-            >
-              <Download size={16} /> 下载审稿包 JSON
-            </button>
-            <button
-              type="button"
-              onClick={() => setResult(generate())}
+              onClick={() => regenerate()}
               className="btn-ghost"
               title="重新生成"
+              disabled={loading}
             >
-              <Loader2 size={16} />
+              <Loader2 size={16} className={loading ? "animate-spin" : ""} />
             </button>
           </div>
         </motion.div>

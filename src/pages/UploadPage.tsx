@@ -3,6 +3,7 @@ import DropzoneCanvas from "@/components/DropzoneCanvas";
 import PagesStrip from "@/components/PagesStrip";
 import SidePanel from "@/components/SidePanel";
 import ActionBar from "@/components/ActionBar";
+import PagesCheck from "@/components/PagesCheck";
 import { Sparkles, ArrowRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -44,6 +45,7 @@ export default function UploadPage() {
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <section className="space-y-6 min-w-0">
             <WorkInfoForm />
+            <PagesCheck />
             <DropzoneCanvas />
             <PagesStrip />
           </section>

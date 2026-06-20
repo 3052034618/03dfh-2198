@@ -371,13 +371,92 @@ export default function ReaderPage() {
           </button>
         </div>
 
-        <div className="w-full max-w-md space-y-4">
-          <div className="h-1.5 rounded-full bg-paper-300 overflow-hidden">
-            <motion.div
-              className="h-full bg-gradient-to-r from-accent-orange to-accent-green"
-              animate={{ width: `${progress}%` }}
-              transition={{ duration: 0.3 }}
-            />
+        <div className="w-full max-w-md space-y-3">
+          {/* 节奏地图：标签节点进度条 */}
+          <div className="relative py-2">
+            <div className="relative h-1.5 rounded-full bg-paper-300 overflow-visible">
+              <motion.div
+                className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-accent-orange to-accent-green"
+                animate={{ width: `${progress}%` }}
+                transition={{ duration: 0.3 }}
+              />
+
+              {pages.map((p, i) => {
+                if (!p.tag) return null;
+                const pct = total > 1 ? (i / (total - 1)) * 100 : 50;
+                const meta = TAG_META[p.tag];
+                const isClimax = p.tag === "climax";
+                const isActive = i === currentIdx;
+                return (
+                  <motion.button
+                    key={p.id + "_rhythm"}
+                    type="button"
+                    onClick={() => {
+                      setDir(i > currentIdx ? "next" : "prev");
+                      setCurrentIdx(i);
+                    }}
+                    whileHover={{ scale: 1.5, y: -1 }}
+                    whileTap={{ scale: 0.9 }}
+                    className={`absolute -translate-x-1/2 -top-0.5 transition-all ${
+                      isActive ? "z-20" : "z-10"
+                    }`}
+                    style={{ left: `${pct}%` }}
+                    title={`第 ${i + 1} 页 · ${meta.label}`}
+                  >
+                    <span
+                      className={cn(
+                        "block rounded-full shadow-paper",
+                        isClimax
+                          ? "w-4 h-4 -mt-[5px] ring-2 ring-white/70 animate-pulse-soft"
+                          : "w-2.5 h-2.5 ring-1 ring-white",
+                        isActive ? "ring-2 ring-ink-900/60" : "",
+                        meta.color.replace("bg-", "bg-"),
+                      )}
+                    />
+                  </motion.button>
+                );
+              })}
+            </div>
+
+            {/* 标签图例 */}
+            {total > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5 justify-center">
+                {Array.from(
+                  new Set(pages.map((p) => p.tag).filter(Boolean) as string[]),
+                ).map((t) => {
+                  const meta = TAG_META[t as keyof typeof TAG_META];
+                  const count = pages.filter((p) => p.tag === t).length;
+                  return (
+                    <span
+                      key={t}
+                      className={cn(
+                        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] text-white",
+                        meta.color,
+                      )}
+                    >
+                      <span>{meta.icon}</span>
+                      <span>
+                        {meta.label} {count}
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* 爆点位置提示 */}
+            <AnimatePresence>
+              {current?.tag === "climax" && (
+                <motion.div
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  className="text-center mt-2 text-[11px] text-accent-orange font-medium font-serif"
+                >
+                  💥 现在处于爆点位置 · 第 {currentIdx + 1} 页
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {readMode === "pause" && (

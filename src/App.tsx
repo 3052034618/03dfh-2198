@@ -10,7 +10,8 @@ export default function App() {
         <Route path="/" element={<Navigate to="/upload" replace />} />
         <Route path="/upload" element={<UploadPage />} />
         <Route path="/reader" element={<ReaderPage />} />
-        <Route path="/share/:data" element={<SharePage />} />
+        <Route path="/share/:data" element={<SharePage mode="long" />} />
+        <Route path="/s/:id" element={<SharePage mode="short" />} />
         <Route path="*" element={<Navigate to="/upload" replace />} />
       </Routes>
     </HashRouter>

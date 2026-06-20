@@ -10,14 +10,28 @@ import type {
 } from "@/types";
 import {
   buildSharePackage,
+  exportFeedbackText,
+  exportStandaloneHtml,
   fileToDataUrl,
-  generateShareLink,
+  generateLongLink,
+  generateShortLink,
   generateThumbnail,
+  loadShortShare,
   loadWorkFromStorage,
   parseShareLink,
+  saveShortShare,
   saveWorkToStorage,
+  type ShareMode,
   uid,
 } from "@/utils";
+
+export interface ShareResult {
+  mode: ShareMode;
+  link: string;
+  ok: boolean;
+  reason?: string;
+  htmlReady: boolean;
+}
 
 interface ComicState {
   currentWork: Work | null;
@@ -51,8 +65,11 @@ interface ComicState {
   setPauseDuration: (sec: number) => void;
 
   // 分享
-  generateShareLink: () => { link: string; ok: boolean; reason?: string };
+  generateShareLink: (mode?: ShareMode) => ShareResult;
+  exportStandaloneFile: (feedback?: string[]) => void;
   loadFromShare: (encoded: string) => SharePackage | null;
+  loadFromShortShare: (id: string) => SharePackage | null;
+  exportFeedbackSummary: (feedback: string[]) => string;
 
   // 持久化
   hydrateFromStorage: () => void;
@@ -235,28 +252,102 @@ export const useComicStore = create<ComicState>((set, get) => ({
   setPauseDuration: (sec) =>
     set({ pauseDuration: Math.min(15, Math.max(1, sec)) }),
 
-  generateShareLink: () => {
+  generateShareLink: (mode) => {
     const { currentWork } = get();
     if (!currentWork || currentWork.pages.length === 0) {
-      return { ok: false, link: "", reason: "请先上传分镜图" };
+      return { ok: false, link: "", reason: "请先上传分镜图", mode: "long", htmlReady: false };
     }
     const pkg = buildSharePackage(currentWork);
-    try {
-      const link = generateShareLink(pkg);
-      if (link.length > 8000) {
+    const htmlReady = true;
+
+    /* 默认自动：长链接能放就长，不行就短 */
+    if (!mode) {
+      try {
+        const longLink = generateLongLink(pkg);
+        if (longLink.length <= 6000) {
+          return { ok: true, link: longLink, mode: "long", htmlReady };
+        }
+      } catch {
+        /* fallback */
+      }
+      try {
+        const id = saveShortShare(pkg);
+        return {
+          ok: true,
+          link: generateShortLink(id),
+          mode: "short",
+          htmlReady,
+        };
+      } catch (e) {
         return {
           ok: false,
-          link,
-          reason: "内容过长，建议减少图片尺寸或下载 JSON 文件分享",
+          link: "",
+          mode: "short",
+          reason: e instanceof Error ? e.message : "存储空间不足",
+          htmlReady,
         };
       }
-      return { ok: true, link };
+    }
+
+    if (mode === "long") {
+      try {
+        const link = generateLongLink(pkg);
+        if (link.length > 8000) {
+          return {
+            ok: false,
+            link,
+            mode: "long",
+            reason: "图片太多导致链接过长（超过 8000 字符），建议改用短链接或导出 HTML 文件",
+            htmlReady,
+          };
+        }
+        return { ok: true, link, mode: "long", htmlReady };
+      } catch {
+        return {
+          ok: false,
+          link: "",
+          mode: "long",
+          reason: "长链接生成失败",
+          htmlReady,
+        };
+      }
+    }
+
+    /* short */
+    try {
+      const id = saveShortShare(pkg);
+      return {
+        ok: true,
+        link: generateShortLink(id),
+        mode: "short",
+        htmlReady,
+      };
     } catch (e) {
-      return { ok: false, link: "", reason: "分享链接生成失败" };
+      return {
+        ok: false,
+        link: "",
+        mode: "short",
+        reason: e instanceof Error ? e.message : "存储空间不足",
+        htmlReady,
+      };
     }
   },
 
+  exportStandaloneFile: (feedback) => {
+    const { currentWork } = get();
+    if (!currentWork) return;
+    const pkg = buildSharePackage(currentWork);
+    exportStandaloneHtml(pkg, currentWork.title || "分镜审稿包", feedback);
+  },
+
   loadFromShare: (encoded) => parseShareLink(encoded),
+  loadFromShortShare: (id) => loadShortShare(id),
+  exportFeedbackSummary: (feedback) => {
+    const { currentWork } = get();
+    if (!currentWork) return "";
+    const pkg = buildSharePackage(currentWork);
+    return exportFeedbackText(pkg, feedback, currentWork.title || "分镜审稿反馈");
+  },
 
   hydrateFromStorage: () => {
     const w = loadWorkFromStorage();
